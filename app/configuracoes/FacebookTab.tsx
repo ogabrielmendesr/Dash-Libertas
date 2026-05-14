@@ -306,7 +306,8 @@ function CurrencyBadge({ currency }: { currency: string | null }) {
     USD: { label: "$", bg: "rgba(56,189,248,0.18)", fg: "#7dd3fc" },
     EUR: { label: "€", bg: "rgba(167,139,250,0.18)", fg: "#c4b5fd" },
   };
-  const c = (currency && map[currency]) ?? { label: currency ?? "?", bg: "rgba(255,255,255,0.08)", fg: "rgba(255,255,255,0.7)" };
+  const fallback = { label: currency ?? "?", bg: "rgba(255,255,255,0.08)", fg: "rgba(255,255,255,0.7)" };
+  const c = currency ? map[currency] ?? fallback : fallback;
   return (
     <div
       className="w-9 h-9 rounded-xl shrink-0 flex items-center justify-center font-display text-[15px]"

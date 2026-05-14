@@ -59,7 +59,7 @@ export async function listAdAccounts(token: string): Promise<FbAdAccount[]> {
   let firstCall = true;
 
   while (next) {
-    const params = firstCall
+    const params: Record<string, string> = firstCall
       ? { fields: "id,name,currency,account_status", limit: "100" }
       : {};
     firstCall = false;

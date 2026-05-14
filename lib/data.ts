@@ -301,8 +301,10 @@ export async function fetchCampaigns(
     .lte("date", untilStr);
 
   type Agg = { spend: number; impressions: number; link_clicks: number; landing_page_views: number; initiate_checkouts: number; sales: number; revenue: number };
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  type Row = any;
   const empty = (): Agg => ({ spend: 0, impressions: 0, link_clicks: 0, landing_page_views: 0, initiate_checkouts: 0, sales: 0, revenue: 0 });
-  const add = (a: Agg, r: typeof data[number]): Agg => {
+  const add = (a: Agg, r: Row): Agg => {
     const adCurrency: Currency = (r.ad_account_currency as Currency) ?? "BRL";
     const spend = convertAmount(Number(r.spend), adCurrency, display, fx);
     const brlRev = convertAmount(Number(r.brl_revenue), "BRL", display, fx);
