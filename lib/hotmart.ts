@@ -109,6 +109,35 @@ export function extractAdIdFromSrc(src: string | null | undefined): string | nul
   return matches[matches.length - 1];
 }
 
+/**
+ * Extrai o placement (último segmento de origin.src).
+ * Ex: "FB|...|Facebook_Mobile_Reels" → "Facebook_Mobile_Reels"
+ */
+export function extractPlacement(src: string | null | undefined): string | null {
+  if (!src || !src.includes("|")) return null;
+  const parts = src.split("|");
+  const last = parts[parts.length - 1]?.trim();
+  return last || null;
+}
+
+/**
+ * Classifica origem de tráfego:
+ *  - 'paid_fb' — anúncio do Facebook com placement válido
+ *  - 'organic_bio' — link da bio (placement contém "bio")
+ *  - 'organic' — sem origin.src
+ *  - 'other' — outras fontes (variável não substituída, etc)
+ */
+export type TrafficSource = "paid_fb" | "organic_bio" | "organic" | "other";
+
+export function classifyTrafficSource(src: string | null | undefined): TrafficSource {
+  if (!src) return "organic";
+  const placement = extractPlacement(src);
+  if (placement && placement.toLowerCase().includes("bio")) return "organic_bio";
+  if (placement === "{{placement}}") return "other"; // variável não substituída
+  if (src.startsWith("FB|")) return "paid_fb";
+  return "other";
+}
+
 export type HotmartWebhook = z.infer<typeof HotmartWebhookSchema>;
 
 export function parseHotmartPayload(raw: unknown): HotmartWebhook {
@@ -199,6 +228,8 @@ export function extractSaleRow(payload: HotmartWebhook) {
     producer_amount_brl: Number.isFinite(producerAmountBrl as number) ? producerAmountBrl : null,
     producer_fx_rate: Number.isFinite(producerFxRate as number) ? producerFxRate : null,
     payment_method: (purchase.payment?.type as string) ?? null,
+    placement: extractPlacement(origin?.src),
+    traffic_source: classifyTrafficSource(origin?.src),
     currency: purchase.price?.currency_value ?? "BRL",
     utm_content: utmContent,
     utm_source: tracking?.utm_source ?? (origin?.src ? "facebook" : null),

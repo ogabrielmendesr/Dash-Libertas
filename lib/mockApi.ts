@@ -116,11 +116,16 @@ export function mockSales() {
       if (s.status === "approved") {
         a.revenue += s.sale_amount;
         a.approved += 1;
+        if (s.ad_name) {
+          a.linked += 1;
+          a.paid += 1;
+        } else {
+          a.organic += 1;
+        }
       } else if (s.status === "refunded") a.refunded += s.sale_amount;
-      if (s.ad_name) a.linked += 1;
       return a;
     },
-    { revenue: 0, refunded: 0, approved: 0, linked: 0 }
+    { revenue: 0, refunded: 0, approved: 0, linked: 0, paid: 0, organic: 0 }
   );
   return { sales: enriched, products, totals };
 }

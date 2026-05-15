@@ -591,10 +591,18 @@ export async function fetchCampaigns(
 // ============================================================
 // SALES
 // ============================================================
+export type SalesBreakdownRow = { name: string; count: number; revenue: number };
+
 export type SalesData = ReturnType<typeof mockSales> & {
   mock?: boolean;
   currency: Currency;
   fx_usd_brl?: number;
+  breakdowns?: {
+    by_placement: SalesBreakdownRow[];
+    by_product: SalesBreakdownRow[];
+    by_payment: SalesBreakdownRow[];
+    by_traffic: SalesBreakdownRow[];
+  };
 };
 
 export async function fetchSales(
@@ -607,7 +615,7 @@ export async function fetchSales(
   const sb = supabaseAdmin();
   let q = sb
     .from("sales")
-    .select("id, transaction_id, status, product_name, sale_amount, currency, producer_amount_usd, producer_amount_brl, utm_content, sale_date, buyer_email")
+    .select("id, transaction_id, status, product_name, sale_amount, currency, producer_amount_usd, producer_amount_brl, utm_content, sale_date, buyer_email, payment_method, placement, traffic_source")
     .order("sale_date", { ascending: false })
     .limit(200);
 
@@ -642,20 +650,76 @@ export async function fetchSales(
   });
 
   const products = Array.from(new Set(enriched.map((s) => s.product_name).filter(Boolean)));
-  const totals = enriched.reduce(
-    (a, s) => {
-      if (s.status === "approved") {
-        a.revenue += s.sale_amount;
-        a.approved += 1;
-        // "Vinculadas a anúncio" = aprovadas que vieram de um anúncio rastreável
-        if (s.ad_name) a.linked += 1;
-      } else if (s.status === "refunded") {
-        a.refunded += s.sale_amount;
-      }
-      return a;
-    },
-    { revenue: 0, refunded: 0, approved: 0, linked: 0 }
-  );
 
-  return { sales: enriched, products, totals, mock: false, currency: display, fx_usd_brl: fx };
+  // Agregadores
+  const byPlacement = new Map<string, SalesBreakdownRow>();
+  const byProduct = new Map<string, SalesBreakdownRow>();
+  const byPayment = new Map<string, SalesBreakdownRow>();
+  const byTraffic = new Map<string, SalesBreakdownRow>();
+
+  let revenue = 0;
+  let refunded = 0;
+  let approved = 0;
+  let linked = 0;
+  let organic = 0;
+  let paid = 0;
+
+  for (const s of enriched) {
+    if (s.status === "approved") {
+      revenue += s.sale_amount;
+      approved += 1;
+      if (s.ad_name) linked += 1;
+
+      const traffic = (s as any).traffic_source as string | null;
+      if (traffic === "paid_fb") paid += 1;
+      else organic += 1;
+
+      // Breakdowns só pra aprovadas (representam dinheiro entrando)
+      const placementKey = (s as any).placement || "Sem placement";
+      const placementCur = byPlacement.get(placementKey) ?? { name: placementKey, count: 0, revenue: 0 };
+      placementCur.count += 1;
+      placementCur.revenue += s.sale_amount;
+      byPlacement.set(placementKey, placementCur);
+
+      const productKey = s.product_name || "Sem produto";
+      const productCur = byProduct.get(productKey) ?? { name: productKey, count: 0, revenue: 0 };
+      productCur.count += 1;
+      productCur.revenue += s.sale_amount;
+      byProduct.set(productKey, productCur);
+
+      const paymentKey = (s as any).payment_method || "Desconhecido";
+      const paymentCur = byPayment.get(paymentKey) ?? { name: paymentKey, count: 0, revenue: 0 };
+      paymentCur.count += 1;
+      paymentCur.revenue += s.sale_amount;
+      byPayment.set(paymentKey, paymentCur);
+
+      const trafficKey = traffic || "organic";
+      const trafficCur = byTraffic.get(trafficKey) ?? { name: trafficKey, count: 0, revenue: 0 };
+      trafficCur.count += 1;
+      trafficCur.revenue += s.sale_amount;
+      byTraffic.set(trafficKey, trafficCur);
+    } else if (s.status === "refunded") {
+      refunded += s.sale_amount;
+    }
+  }
+
+  const sortByCount = (a: SalesBreakdownRow, b: SalesBreakdownRow) => b.count - a.count;
+  const breakdowns = {
+    by_placement: Array.from(byPlacement.values()).sort(sortByCount),
+    by_product: Array.from(byProduct.values()).sort(sortByCount),
+    by_payment: Array.from(byPayment.values()).sort(sortByCount),
+    by_traffic: Array.from(byTraffic.values()).sort(sortByCount),
+  };
+
+  const totals = { revenue, refunded, approved, linked, organic, paid };
+
+  return {
+    sales: enriched,
+    products,
+    totals,
+    breakdowns,
+    mock: false,
+    currency: display,
+    fx_usd_brl: fx,
+  };
 }
