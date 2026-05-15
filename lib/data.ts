@@ -123,8 +123,8 @@ export async function fetchDashboard(
   const { data: salesRange } = await sb
     .from("sales")
     .select("utm_content, sale_amount, currency, status, sale_date")
-    .gte("sale_date", `${sinceStr}T00:00:00`)
-    .lte("sale_date", `${untilStr}T23:59:59.999`);
+    .gte("sale_date", `${sinceStr}T00:00:00-03:00`)
+    .lte("sale_date", `${untilStr}T23:59:59.999-03:00`);
 
   // 3) Agrega vendas APROVADAS por ad_id (utm_content), convertendo cada uma pra display
   const salesByAd = new Map<string, { count: number; revenue: number }>();
@@ -271,8 +271,8 @@ export async function fetchDashboard(
   const { data: salesInRange } = await sb
     .from("sales")
     .select("sale_amount, currency, sale_date, status")
-    .gte("sale_date", `${sinceStr}T00:00:00`)
-    .lte("sale_date", `${untilStr}T23:59:59.999`);
+    .gte("sale_date", `${sinceStr}T00:00:00-03:00`)
+    .lte("sale_date", `${untilStr}T23:59:59.999-03:00`);
 
   const hourRevenueBuckets = Array.from({ length: 24 }, () => 0);
   for (const s of salesInRange ?? []) {
@@ -395,8 +395,8 @@ export async function fetchCampaigns(
   const { data: salesRange } = await sb
     .from("sales")
     .select("utm_content, sale_amount, currency, status")
-    .gte("sale_date", `${sinceStr}T00:00:00`)
-    .lte("sale_date", `${untilStr}T23:59:59.999`);
+    .gte("sale_date", `${sinceStr}T00:00:00-03:00`)
+    .lte("sale_date", `${untilStr}T23:59:59.999-03:00`);
 
   const salesByAd = new Map<string, { count: number; revenue: number }>();
   for (const s of salesRange ?? []) {
@@ -508,7 +508,7 @@ export async function fetchSales(
 
   if (range) {
     // sale_date é timestamptz — filtra do início do "since" até o fim do "until"
-    q = q.gte("sale_date", `${range.since}T00:00:00`).lte("sale_date", `${range.until}T23:59:59.999`);
+    q = q.gte("sale_date", `${range.since}T00:00:00-03:00`).lte("sale_date", `${range.until}T23:59:59.999-03:00`);
   }
 
   const { data: sales } = await q;
