@@ -79,6 +79,7 @@ export async function POST(req: NextRequest, ctx: { params: { secret: string } }
         producer_amount_usd: row.producer_amount_usd,
         producer_amount_brl: row.producer_amount_brl,
         producer_fx_rate: row.producer_fx_rate,
+        payment_method: row.payment_method,
         currency: row.currency,
         utm_content: row.utm_content,
         utm_source: row.utm_source,

@@ -198,6 +198,7 @@ export function extractSaleRow(payload: HotmartWebhook) {
     producer_amount_usd: Number.isFinite(producerAmountUsd as number) ? producerAmountUsd : null,
     producer_amount_brl: Number.isFinite(producerAmountBrl as number) ? producerAmountBrl : null,
     producer_fx_rate: Number.isFinite(producerFxRate as number) ? producerFxRate : null,
+    payment_method: (purchase.payment?.type as string) ?? null,
     currency: purchase.price?.currency_value ?? "BRL",
     utm_content: utmContent,
     utm_source: tracking?.utm_source ?? (origin?.src ? "facebook" : null),

@@ -125,18 +125,48 @@ export default async function Page({
 
             {/* Mini stats strip */}
             <section className="px-4 sm:px-6 lg:px-8 pb-5 sm:pb-6">
-              <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 sm:gap-4">
-                <StatTile label="CPA" value={formatMoney(cpa, data.currency)} hint="custo por aquisição" tint="teal" icon="◎" />
-                <StatTile label="Ticket médio" value={formatMoney(ticket, data.currency)} hint="receita ÷ vendas" tint="violet" icon="✦" />
-                <StatTile label="Vendas no mês" value={formatInt(t.sales, data.currency)} hint="apenas aprovadas" tint="mint" icon="↑" />
-                <StatTile label="Checkouts" value={formatInt(t.initiate_checkouts, data.currency)} hint="iniciados no Meta" tint="amber" icon="◐" />
-                <StatTile label="Page Views" value={formatInt(t.landing_page_views, data.currency)} hint="visualizações de página" tint="azure" icon="◇" />
+              <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3 sm:gap-4">
                 <StatTile
-                  label="CPM médio"
-                  value={t.impressions > 0 ? formatMoney((t.spend / t.impressions) * 1000, data.currency) : "—"}
-                  hint="custo por mil impressões"
+                  label="CPA"
+                  value={formatMoney(cpa, data.currency)}
+                  hint="custo por aquisição"
+                  tint="teal"
+                  icon="◎"
+                />
+                <StatTile
+                  label="Ticket médio"
+                  value={formatMoney(ticket, data.currency)}
+                  hint="receita ÷ vendas"
                   tint="violet"
-                  icon="◈"
+                  icon="✦"
+                />
+                <StatTile
+                  label="ARPU"
+                  value={formatMoney(data.arpu ?? 0, data.currency)}
+                  hint={`${formatInt(data.unique_buyers ?? 0, data.currency)} compradores únicos`}
+                  tint="azure"
+                  icon="✪"
+                />
+                <StatTile
+                  label="Vendas"
+                  value={formatInt(t.sales, data.currency)}
+                  hint="apenas aprovadas"
+                  tint="mint"
+                  icon="↑"
+                />
+                <StatTile
+                  label="Taxa de aprovação"
+                  value={`${((data.approval_rate ?? 1) * 100).toFixed(1)}%`}
+                  hint={
+                    (data.method_breakdown ?? []).slice(0, 2).length > 0
+                      ? (data.method_breakdown ?? [])
+                          .slice(0, 2)
+                          .map((m) => `${prettifyMethod(m.method)} ${(m.rate * 100).toFixed(0)}%`)
+                          .join(" · ")
+                      : "por método de pagamento"
+                  }
+                  tint="amber"
+                  icon="◐"
                 />
               </div>
             </section>
@@ -240,5 +270,22 @@ function StatTile({ label, value, hint, tint, icon }: { label: string; value: st
       {hint ? <div className="mt-1 text-[11px] text-white/45">{hint}</div> : null}
     </div>
   );
+}
+
+function prettifyMethod(m: string): string {
+  const map: Record<string, string> = {
+    CREDIT_CARD: "Cartão",
+    BILLET: "Boleto",
+    PIX: "Pix",
+    PAYPAL: "PayPal",
+    APPLE_PAY: "Apple Pay",
+    GOOGLE_PAY: "G Pay",
+    BANK_TRANSFER: "Transf.",
+    MERCADO_PAGO: "Mercado Pago",
+    YAPE: "Yape",
+    SERVIPAG: "Servipag",
+    HOTPAY: "HotPay",
+  };
+  return map[m] ?? m;
 }
 

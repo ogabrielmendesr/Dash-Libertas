@@ -119,12 +119,23 @@ export type HourlyPoint = {
   profit: number;
 };
 
+export type MethodBreakdown = {
+  method: string;
+  total: number;
+  approved: number;
+  rate: number;
+};
+
 export type DashboardData = ReturnType<typeof mockDashboard> & {
   mock?: boolean;
   currency: Currency;
   fx_usd_brl?: number;
   hourly?: HourlyPoint[];
   current_hour?: number;
+  unique_buyers?: number;
+  arpu?: number;
+  approval_rate?: number;
+  method_breakdown?: MethodBreakdown[];
 };
 
 export async function fetchDashboard(
@@ -165,7 +176,7 @@ export async function fetchDashboard(
   // 2) Vendas no período (TODAS, cruzaremos depois)
   const { data: salesRange } = await sb
     .from("sales")
-    .select("utm_content, sale_amount, currency, producer_amount_usd, producer_amount_brl, status, sale_date")
+    .select("utm_content, sale_amount, currency, producer_amount_usd, producer_amount_brl, status, sale_date, buyer_email, payment_method")
     .gte("sale_date", `${sinceStr}T00:00:00-03:00`)
     .lte("sale_date", `${untilStr}T23:59:59.999-03:00`);
 
@@ -300,6 +311,48 @@ export async function fetchDashboard(
   );
 
   // ============================================================
+  // ARPU + Taxa de aprovação por método de pagamento
+  // ============================================================
+  // ARPU = receita / compradores únicos (mesmo comprador comprando 2x conta 1 user)
+  // Taxa de aprovação = approved / (approved + refunded + chargeback + cancelled)
+  // ============================================================
+  const uniqueBuyers = new Set<string>();
+  let approvedRevenueInDisplay = 0;
+  let approvedCount = 0;
+  let nonApprovedCount = 0;
+  const byMethod = new Map<string, { total: number; approved: number }>();
+
+  for (const s of salesRange ?? []) {
+    const method = (s as any).payment_method as string | null;
+    if (method) {
+      const cur = byMethod.get(method) ?? { total: 0, approved: 0 };
+      cur.total += 1;
+      if (s.status === "approved") cur.approved += 1;
+      byMethod.set(method, cur);
+    }
+    if (s.status === "approved") {
+      approvedCount += 1;
+      const email = (s as any).buyer_email as string | null;
+      if (email) uniqueBuyers.add(email);
+      approvedRevenueInDisplay += saleAmountInDisplay(s as any, display, fx, fxTable);
+    } else if (["refunded", "chargeback", "cancelled"].includes(s.status as string)) {
+      nonApprovedCount += 1;
+    }
+  }
+
+  const arpu = uniqueBuyers.size > 0 ? approvedRevenueInDisplay / uniqueBuyers.size : 0;
+  const totalStatusedTxn = approvedCount + nonApprovedCount;
+  const approvalRate = totalStatusedTxn > 0 ? approvedCount / totalStatusedTxn : 1;
+  const methodBreakdown = Array.from(byMethod.entries())
+    .map(([method, v]) => ({
+      method,
+      total: v.total,
+      approved: v.approved,
+      rate: v.total > 0 ? v.approved / v.total : 0,
+    }))
+    .sort((a, b) => b.total - a.total);
+
+  // ============================================================
   // DADOS POR HORA (acumulado) — para o chart de Faturamento × Investimento × Lucro
   // ============================================================
   // Investimento: distribuído uniformemente em 24h (Meta retorna spend diário)
@@ -392,6 +445,10 @@ export async function fetchDashboard(
     recent_sales,
     hourly,
     current_hour: currentHour,
+    unique_buyers: uniqueBuyers.size,
+    arpu,
+    approval_rate: approvalRate,
+    method_breakdown: methodBreakdown,
     mock: false,
     currency: display,
     fx_usd_brl: fx,
