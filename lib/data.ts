@@ -106,18 +106,28 @@ export async function fetchDashboard(
   const sinceStr = range.since;
   const untilStr = range.until;
 
-  // 1) Insights do Meta no período (com filtro de contas habilitadas via JOIN com fb_ad_accounts)
-  const { data: insightRows } = await sb
-    .from("fb_ad_insights")
-    .select(`
-      ad_id, ad_name, adset_id, adset_name, campaign_id, campaign_name,
-      ad_account_id, date, spend, impressions, link_clicks,
-      landing_page_views, initiate_checkouts,
-      fb_ad_accounts!inner(currency, is_enabled)
-    `)
-    .eq("fb_ad_accounts.is_enabled", true)
-    .gte("date", sinceStr)
-    .lte("date", untilStr);
+  // 1) Pega contas habilitadas (currency map)
+  const { data: enabledAccounts } = await sb
+    .from("fb_ad_accounts")
+    .select("ad_account_id, currency")
+    .eq("is_enabled", true);
+  const enabledIds = (enabledAccounts ?? []).map((a) => a.ad_account_id);
+  const currencyByAccount = new Map<string, string>(
+    (enabledAccounts ?? []).map((a) => [a.ad_account_id, a.currency])
+  );
+
+  // 2) Insights do Meta no período, apenas das contas habilitadas
+  const { data: insightRows } = enabledIds.length === 0 ? { data: [] } :
+    await sb
+      .from("fb_ad_insights")
+      .select(`
+        ad_id, ad_name, adset_id, adset_name, campaign_id, campaign_name,
+        ad_account_id, date, spend, impressions, link_clicks,
+        landing_page_views, initiate_checkouts
+      `)
+      .in("ad_account_id", enabledIds)
+      .gte("date", sinceStr)
+      .lte("date", untilStr);
 
   // 2) Vendas no período (TODAS, cruzaremos depois)
   const { data: salesRange } = await sb
@@ -146,7 +156,6 @@ export async function fetchDashboard(
     ad_account_id: string; date: string;
     spend: number; impressions: number; link_clicks: number;
     landing_page_views: number; initiate_checkouts: number;
-    fb_ad_accounts: { currency: string; is_enabled: boolean };
   };
   // Distribui as vendas por ad_id em apenas UM dia (o último dia do range com insight)
   // pra evitar duplicação no agregado por dia. O cruzamento ad_id × revenue é total no período.
@@ -164,7 +173,7 @@ export async function fetchDashboard(
     sales_total: number;
   };
   const converted: Row[] = rawInsights.map((r) => {
-    const adCurrency = (r.fb_ad_accounts?.currency as Currency) ?? "BRL";
+    const adCurrency = ((currencyByAccount.get(r.ad_account_id) as Currency) ?? "BRL") as Currency;
     const spend = convertAmount(Number(r.spend), adCurrency, display, fx);
     // Anexa as vendas só no "último dia" do anúncio dentro do range, pra somar no total certo
     const isLastDay = lastDayPerAd.get(r.ad_id) === r.date;
@@ -378,18 +387,27 @@ export async function fetchCampaigns(
   const sinceStr = range.since;
   const untilStr = range.until;
 
-  // Insights por ad no período (com filtro de contas habilitadas)
-  const { data: insightRows } = await sb
-    .from("fb_ad_insights")
-    .select(`
-      ad_id, ad_name, adset_id, adset_name, campaign_id, campaign_name,
-      ad_account_id, date, spend, impressions, link_clicks,
-      landing_page_views, initiate_checkouts,
-      fb_ad_accounts!inner(currency, is_enabled)
-    `)
-    .eq("fb_ad_accounts.is_enabled", true)
-    .gte("date", sinceStr)
-    .lte("date", untilStr);
+  // Contas habilitadas
+  const { data: enabledAccs } = await sb
+    .from("fb_ad_accounts")
+    .select("ad_account_id, currency")
+    .eq("is_enabled", true);
+  const enabledIds2 = (enabledAccs ?? []).map((a) => a.ad_account_id);
+  const currencyByAcc = new Map<string, string>(
+    (enabledAccs ?? []).map((a) => [a.ad_account_id, a.currency])
+  );
+
+  const { data: insightRows } = enabledIds2.length === 0 ? { data: [] } :
+    await sb
+      .from("fb_ad_insights")
+      .select(`
+        ad_id, ad_name, adset_id, adset_name, campaign_id, campaign_name,
+        ad_account_id, date, spend, impressions, link_clicks,
+        landing_page_views, initiate_checkouts
+      `)
+      .in("ad_account_id", enabledIds2)
+      .gte("date", sinceStr)
+      .lte("date", untilStr);
 
   // Vendas no período
   const { data: salesRange } = await sb
@@ -417,7 +435,7 @@ export async function fetchCampaigns(
   const adsByAdId = new Map<string, AdAcc>();
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   for (const r of (insightRows ?? []) as any[]) {
-    const adCurrency: Currency = ((r.fb_ad_accounts?.currency as Currency) ?? "BRL");
+    const adCurrency: Currency = ((currencyByAcc.get(r.ad_account_id) as Currency) ?? "BRL");
     const spend = convertAmount(Number(r.spend), adCurrency, display, fx);
     const cur = adsByAdId.get(r.ad_id) ?? {
       ad_id: r.ad_id,
