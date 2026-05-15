@@ -39,6 +39,16 @@ const CommissionSchema = z
   .optional()
   .nullable();
 
+const OriginSchema = z
+  .object({
+    sck: z.string().optional().nullable(),
+    src: z.string().optional().nullable(),
+    xcod: z.string().optional().nullable(),
+  })
+  .passthrough()
+  .optional()
+  .nullable();
+
 const HotmartWebhookSchema = z
   .object({
     id: z.string().optional(),
@@ -74,6 +84,7 @@ const HotmartWebhookSchema = z
             price: PriceSchema.optional(),
             commission: CommissionSchema,
             tracking: TrackingSchema,
+            origin: OriginSchema,
             sck: z.string().optional().nullable(),
           })
           .passthrough(),
@@ -81,6 +92,22 @@ const HotmartWebhookSchema = z
       .passthrough(),
   })
   .passthrough();
+
+/**
+ * Extrai o ad_id do Facebook do campo `purchase.origin.src` da Hotmart.
+ *
+ * Formato observado (Hotmart Click Ads):
+ *   FB|<adset_name>|<adset_id>|<campaign_name>|<campaign_id>|<ad_name>|<ad_id>|<placement>
+ *
+ * Estratégia: pegar todos os IDs numéricos longos (10+ dígitos) e retornar o ÚLTIMO,
+ * que pelo padrão observado é sempre o ad_id (vem antes do placement).
+ */
+export function extractAdIdFromSrc(src: string | null | undefined): string | null {
+  if (!src) return null;
+  const matches = src.match(/\d{10,}/g);
+  if (!matches || matches.length === 0) return null;
+  return matches[matches.length - 1];
+}
 
 export type HotmartWebhook = z.infer<typeof HotmartWebhookSchema>;
 
@@ -108,10 +135,11 @@ export function normalizeHotmartStatus(
 }
 
 export function extractSaleRow(payload: HotmartWebhook) {
-  const purchase = payload.data.purchase;
+  const purchase = payload.data.purchase as Record<string, any>;
   const product = payload.data.product;
   const buyer = payload.data.buyer ?? undefined;
   const tracking = purchase.tracking ?? undefined;
+  const origin = purchase.origin ?? undefined;
 
   const priceValue =
     typeof purchase.price?.value === "string"
@@ -125,6 +153,15 @@ export function extractSaleRow(payload: HotmartWebhook) {
 
   const orderDateMs = purchase.order_date ?? purchase.approved_date ?? Date.now();
 
+  // ⚠ Hotmart pode entregar o ad_id em 2 lugares:
+  //   1) tracking.utm_content (anúncios manuais com utm_content={{ad.id}})
+  //   2) purchase.origin.src/xcod (Hotmart Click Ads — formato proprietário)
+  // Usamos utm_content se vier, senão extraímos do origin.src/xcod.
+  const utmContentFromTracking = tracking?.utm_content ?? null;
+  const utmContentFromOrigin =
+    extractAdIdFromSrc(origin?.src) ?? extractAdIdFromSrc(origin?.xcod);
+  const utmContent = utmContentFromTracking || utmContentFromOrigin;
+
   return {
     transaction_id: purchase.transaction,
     status: normalizeHotmartStatus(purchase.status),
@@ -135,12 +172,12 @@ export function extractSaleRow(payload: HotmartWebhook) {
       ? (commissionValue as number)
       : null,
     currency: purchase.price?.currency_value ?? "BRL",
-    utm_content: tracking?.utm_content ?? null,
-    utm_source: tracking?.utm_source ?? null,
+    utm_content: utmContent,
+    utm_source: tracking?.utm_source ?? (origin?.src ? "facebook" : null),
     utm_medium: tracking?.utm_medium ?? null,
     utm_campaign: tracking?.utm_campaign ?? null,
     utm_term: tracking?.utm_term ?? null,
-    sck: tracking?.source_sck ?? purchase.sck ?? null,
+    sck: tracking?.source_sck ?? origin?.sck ?? purchase.sck ?? null,
     buyer_email: buyer?.email ?? null,
     buyer_name: buyer?.name ?? null,
     sale_date: new Date(orderDateMs).toISOString(),

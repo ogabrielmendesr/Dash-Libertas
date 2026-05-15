@@ -41,6 +41,40 @@ async function getSettings(): Promise<{ display_currency: Currency; fx_usd_brl: 
   };
 }
 
+/**
+ * Pega tabela de fx_rates (currency → USD rate). 1 USD = X moeda.
+ * Usado pra converter vendas em moedas regionais (CLP, MXN, etc.) pra USD primeiro,
+ * antes de converter pro display.
+ */
+async function getFxTable(): Promise<Map<string, number>> {
+  if (useMockData()) return new Map([["USD", 1], ["BRL", 5]]);
+  const sb = supabaseAdmin();
+  const { data } = await sb.from("fx_rates").select("currency, usd_rate");
+  const map = new Map<string, number>();
+  for (const r of data ?? []) {
+    map.set(r.currency, Number(r.usd_rate));
+  }
+  return map;
+}
+
+/**
+ * Converte um valor de qualquer moeda regional pra display (BRL ou USD).
+ * 1) moeda → USD (dividindo pela rate)
+ * 2) USD → display (via convertAmount)
+ */
+function convertAnyToDisplay(
+  value: number,
+  fromCurrency: string,
+  display: Currency,
+  fxUsdBrl: number,
+  fxTable: Map<string, number>
+): number {
+  if (!Number.isFinite(value)) return 0;
+  const rate = fxTable.get(fromCurrency) ?? 1;
+  const inUsd = value / (rate || 1);
+  return convertAmount(inUsd, "USD", display, fxUsdBrl);
+}
+
 // ============================================================
 // DASHBOARD
 // ============================================================
@@ -67,33 +101,86 @@ export async function fetchDashboard(
   if (useMockData()) return { ...mockDashboard(days), mock: true, currency: "BRL" };
 
   const { display_currency: display, fx_usd_brl: fx } = await getSettings();
+  const fxTable = await getFxTable();
   const sb = supabaseAdmin();
   const sinceStr = range.since;
   const untilStr = range.until;
 
-  const { data: rows } = await sb
-    .from("ad_performance")
-    .select("*")
+  // 1) Insights do Meta no período (com filtro de contas habilitadas via JOIN com fb_ad_accounts)
+  const { data: insightRows } = await sb
+    .from("fb_ad_insights")
+    .select(`
+      ad_id, ad_name, adset_id, adset_name, campaign_id, campaign_name,
+      ad_account_id, date, spend, impressions, link_clicks,
+      landing_page_views, initiate_checkouts,
+      fb_ad_accounts!inner(currency, is_enabled)
+    `)
+    .eq("fb_ad_accounts.is_enabled", true)
     .gte("date", sinceStr)
     .lte("date", untilStr);
 
-  const list = rows ?? [];
+  // 2) Vendas no período (TODAS, cruzaremos depois)
+  const { data: salesRange } = await sb
+    .from("sales")
+    .select("utm_content, sale_amount, currency, status, sale_date")
+    .gte("sale_date", `${sinceStr}T00:00:00`)
+    .lte("sale_date", `${untilStr}T23:59:59.999`);
 
-  // Converte cada linha para display
-  type Row = (typeof list)[number];
-  const convert = (r: Row) => {
-    const adCurrency: Currency = (r.ad_account_currency as Currency) ?? "BRL";
+  // 3) Agrega vendas APROVADAS por ad_id (utm_content), convertendo cada uma pra display
+  const salesByAd = new Map<string, { count: number; revenue: number }>();
+  for (const s of salesRange ?? []) {
+    if (s.status !== "approved" || !s.utm_content) continue;
+    const saleCurr = String(s.currency ?? "BRL");
+    const revInDisplay = convertAnyToDisplay(Number(s.sale_amount), saleCurr, display, fx, fxTable);
+    const prev = salesByAd.get(s.utm_content) ?? { count: 0, revenue: 0 };
+    prev.count += 1;
+    prev.revenue += revInDisplay;
+    salesByAd.set(s.utm_content, prev);
+  }
+
+  // 4) Construir o "list" no formato esperado, cruzando insight + vendas por ad_id apenas
+  type InsightRow = {
+    ad_id: string; ad_name: string;
+    adset_id: string; adset_name: string;
+    campaign_id: string; campaign_name: string;
+    ad_account_id: string; date: string;
+    spend: number; impressions: number; link_clicks: number;
+    landing_page_views: number; initiate_checkouts: number;
+    fb_ad_accounts: { currency: string; is_enabled: boolean };
+  };
+  // Distribui as vendas por ad_id em apenas UM dia (o último dia do range com insight)
+  // pra evitar duplicação no agregado por dia. O cruzamento ad_id × revenue é total no período.
+  const rawInsights = (insightRows ?? []) as unknown as InsightRow[];
+  const lastDayPerAd = new Map<string, string>();
+  for (const r of rawInsights) {
+    const cur = lastDayPerAd.get(r.ad_id);
+    if (!cur || r.date > cur) lastDayPerAd.set(r.ad_id, r.date);
+  }
+
+  type Row = InsightRow & {
+    ad_account_currency: string;
+    spend_disp: number;
+    revenue_disp: number;
+    sales_total: number;
+  };
+  const converted: Row[] = rawInsights.map((r) => {
+    const adCurrency = (r.fb_ad_accounts?.currency as Currency) ?? "BRL";
     const spend = convertAmount(Number(r.spend), adCurrency, display, fx);
-    const brlRev = convertAmount(Number(r.brl_revenue), "BRL", display, fx);
-    const usdRev = convertAmount(Number(r.usd_revenue), "USD", display, fx);
+    // Anexa as vendas só no "último dia" do anúncio dentro do range, pra somar no total certo
+    const isLastDay = lastDayPerAd.get(r.ad_id) === r.date;
+    const adSales = isLastDay ? salesByAd.get(r.ad_id) : undefined;
     return {
       ...r,
+      ad_account_currency: adCurrency,
       spend_disp: spend,
-      revenue_disp: brlRev + usdRev,
-      sales_total: Number(r.brl_sales_count) + Number(r.usd_sales_count),
+      revenue_disp: adSales?.revenue ?? 0,
+      sales_total: adSales?.count ?? 0,
     };
-  };
-  const converted = list.map(convert);
+  });
+
+  // Adiciona "ads sem insight no período mas com vendas no período" (vendas fantasma)
+  // Não criamos linha pra esses casos por enquanto — eles aparecem em /vendas como órfãos visuais
+  // mas o ROAS por ad só conta quando há gasto.
 
   // Por dia
   const byDay = new Map<string, { date: string; spend: number; revenue: number; sales: number }>();
@@ -129,9 +216,6 @@ export async function fetchDashboard(
   for (const r of converted) {
     const k = r.ad_id as string;
     const adCurrency: Currency = (r.ad_account_currency as Currency) ?? "BRL";
-    const hasMixedSales =
-      (Number(r.brl_revenue) > 0 && adCurrency !== "BRL") ||
-      (Number(r.usd_revenue) > 0 && adCurrency !== "USD");
     const prev =
       byAd.get(k) ?? {
         ad_id: r.ad_id,
@@ -157,7 +241,6 @@ export async function fetchDashboard(
     prev.initiate_checkouts += Number(r.initiate_checkouts);
     prev.sales += r.sales_total;
     prev.revenue += r.revenue_disp;
-    if (hasMixedSales) prev.mixed_currency = true;
     byAd.set(k, prev);
   }
   const ads = Array.from(byAd.values()).sort((a, b) => b.revenue - a.revenue);
@@ -202,8 +285,8 @@ export async function fetchDashboard(
     }).format(d);
     const hourNum = parseInt(hourStr, 10);
     if (!Number.isFinite(hourNum) || hourNum < 0 || hourNum > 23) continue;
-    const saleCurr: Currency = (s.currency as Currency) ?? "BRL";
-    hourRevenueBuckets[hourNum] += convertAmount(Number(s.sale_amount), saleCurr, display, fx);
+    const saleCurr = String(s.currency ?? "BRL");
+    hourRevenueBuckets[hourNum] += convertAnyToDisplay(Number(s.sale_amount), saleCurr, display, fx, fxTable);
   }
 
   let spendCum = 0;
@@ -244,8 +327,8 @@ export async function fetchDashboard(
   const adById = new Map(ads.map((a) => [a.ad_id, a]));
   const recent_sales = (recentSales ?? []).map((s) => {
     const ad = s.utm_content ? adById.get(s.utm_content) : undefined;
-    const saleCurr = (s.currency as Currency) ?? "BRL";
-    const displayedAmount = convertAmount(Number(s.sale_amount), saleCurr, display, fx);
+    const saleCurr = String(s.currency ?? "BRL");
+    const displayedAmount = convertAnyToDisplay(Number(s.sale_amount), saleCurr, display, fx, fxTable);
     return {
       id: s.id,
       transaction_id: s.transaction_id,
@@ -290,48 +373,95 @@ export async function fetchCampaigns(
   if (useMockData()) return { ...mockCampaigns(), mock: true, currency: "BRL" };
 
   const { display_currency: display, fx_usd_brl: fx } = await getSettings();
+  const fxTable = await getFxTable();
   const sb = supabaseAdmin();
   const sinceStr = range.since;
   const untilStr = range.until;
 
-  const { data } = await sb
-    .from("ad_performance")
-    .select("*")
+  // Insights por ad no período (com filtro de contas habilitadas)
+  const { data: insightRows } = await sb
+    .from("fb_ad_insights")
+    .select(`
+      ad_id, ad_name, adset_id, adset_name, campaign_id, campaign_name,
+      ad_account_id, date, spend, impressions, link_clicks,
+      landing_page_views, initiate_checkouts,
+      fb_ad_accounts!inner(currency, is_enabled)
+    `)
+    .eq("fb_ad_accounts.is_enabled", true)
     .gte("date", sinceStr)
     .lte("date", untilStr);
 
+  // Vendas no período
+  const { data: salesRange } = await sb
+    .from("sales")
+    .select("utm_content, sale_amount, currency, status")
+    .gte("sale_date", `${sinceStr}T00:00:00`)
+    .lte("sale_date", `${untilStr}T23:59:59.999`);
+
+  const salesByAd = new Map<string, { count: number; revenue: number }>();
+  for (const s of salesRange ?? []) {
+    if (s.status !== "approved" || !s.utm_content) continue;
+    const saleCurr = String(s.currency ?? "BRL");
+    const revInDisplay = convertAnyToDisplay(Number(s.sale_amount), saleCurr, display, fx, fxTable);
+    const prev = salesByAd.get(s.utm_content) ?? { count: 0, revenue: 0 };
+    prev.count += 1;
+    prev.revenue += revInDisplay;
+    salesByAd.set(s.utm_content, prev);
+  }
+
   type Agg = { spend: number; impressions: number; link_clicks: number; landing_page_views: number; initiate_checkouts: number; sales: number; revenue: number };
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  type Row = any;
   const empty = (): Agg => ({ spend: 0, impressions: 0, link_clicks: 0, landing_page_views: 0, initiate_checkouts: 0, sales: 0, revenue: 0 });
-  const add = (a: Agg, r: Row): Agg => {
-    const adCurrency: Currency = (r.ad_account_currency as Currency) ?? "BRL";
+
+  // Primeiro agrega por ad_id (somando spend de todos os dias)
+  type AdAcc = { ad_id: string; ad_name: string; adset_id: string; adset_name: string; campaign_id: string; campaign_name: string; agg: Agg };
+  const adsByAdId = new Map<string, AdAcc>();
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  for (const r of (insightRows ?? []) as any[]) {
+    const adCurrency: Currency = ((r.fb_ad_accounts?.currency as Currency) ?? "BRL");
     const spend = convertAmount(Number(r.spend), adCurrency, display, fx);
-    const brlRev = convertAmount(Number(r.brl_revenue), "BRL", display, fx);
-    const usdRev = convertAmount(Number(r.usd_revenue), "USD", display, fx);
-    return {
-      spend: a.spend + spend,
-      impressions: a.impressions + Number(r.impressions),
-      link_clicks: a.link_clicks + Number(r.link_clicks),
-      landing_page_views: a.landing_page_views + Number(r.landing_page_views),
-      initiate_checkouts: a.initiate_checkouts + Number(r.initiate_checkouts),
-      sales: a.sales + Number(r.brl_sales_count) + Number(r.usd_sales_count),
-      revenue: a.revenue + brlRev + usdRev,
+    const cur = adsByAdId.get(r.ad_id) ?? {
+      ad_id: r.ad_id,
+      ad_name: r.ad_name,
+      adset_id: r.adset_id,
+      adset_name: r.adset_name,
+      campaign_id: r.campaign_id,
+      campaign_name: r.campaign_name,
+      agg: empty(),
     };
-  };
+    cur.agg.spend += spend;
+    cur.agg.impressions += Number(r.impressions);
+    cur.agg.link_clicks += Number(r.link_clicks);
+    cur.agg.landing_page_views += Number(r.landing_page_views);
+    cur.agg.initiate_checkouts += Number(r.initiate_checkouts);
+    adsByAdId.set(r.ad_id, cur);
+  }
+  // Anexa vendas (cruzamento por ad_id apenas) — total no período
+  for (const [adId, ad] of adsByAdId) {
+    const sales = salesByAd.get(adId);
+    if (sales) {
+      ad.agg.sales = sales.count;
+      ad.agg.revenue = sales.revenue;
+    }
+  }
 
   const tree = new Map<string, { campaign_id: string; campaign_name: string; agg: Agg; adsets: Map<string, { adset_id: string; adset_name: string; agg: Agg; ads: Map<string, { ad_id: string; ad_name: string; agg: Agg }> }> }>();
-
-  for (const r of data ?? []) {
-    if (!tree.has(r.campaign_id)) tree.set(r.campaign_id, { campaign_id: r.campaign_id, campaign_name: r.campaign_name, agg: empty(), adsets: new Map() });
-    const c = tree.get(r.campaign_id)!;
-    c.agg = add(c.agg, r);
-    if (!c.adsets.has(r.adset_id)) c.adsets.set(r.adset_id, { adset_id: r.adset_id, adset_name: r.adset_name, agg: empty(), ads: new Map() });
-    const s = c.adsets.get(r.adset_id)!;
-    s.agg = add(s.agg, r);
-    if (!s.ads.has(r.ad_id)) s.ads.set(r.ad_id, { ad_id: r.ad_id, ad_name: r.ad_name, agg: empty() });
-    const a = s.ads.get(r.ad_id)!;
-    a.agg = add(a.agg, r);
+  const sumAgg = (a: Agg, b: Agg): Agg => ({
+    spend: a.spend + b.spend,
+    impressions: a.impressions + b.impressions,
+    link_clicks: a.link_clicks + b.link_clicks,
+    landing_page_views: a.landing_page_views + b.landing_page_views,
+    initiate_checkouts: a.initiate_checkouts + b.initiate_checkouts,
+    sales: a.sales + b.sales,
+    revenue: a.revenue + b.revenue,
+  });
+  for (const ad of adsByAdId.values()) {
+    if (!tree.has(ad.campaign_id)) tree.set(ad.campaign_id, { campaign_id: ad.campaign_id, campaign_name: ad.campaign_name, agg: empty(), adsets: new Map() });
+    const c = tree.get(ad.campaign_id)!;
+    c.agg = sumAgg(c.agg, ad.agg);
+    if (!c.adsets.has(ad.adset_id)) c.adsets.set(ad.adset_id, { adset_id: ad.adset_id, adset_name: ad.adset_name, agg: empty(), ads: new Map() });
+    const s = c.adsets.get(ad.adset_id)!;
+    s.agg = sumAgg(s.agg, ad.agg);
+    s.ads.set(ad.ad_id, { ad_id: ad.ad_id, ad_name: ad.ad_name, agg: ad.agg });
   }
 
   return {
@@ -368,6 +498,7 @@ export async function fetchSales(
   if (useMockData()) return { ...mockSales(), mock: true, currency: "BRL" };
 
   const { display_currency: display, fx_usd_brl: fx } = await getSettings();
+  const fxTable = await getFxTable();
   const sb = supabaseAdmin();
   let q = sb
     .from("sales")
@@ -393,8 +524,8 @@ export async function fetchSales(
   }
 
   const enriched = (sales ?? []).map((s) => {
-    const saleCurr = (s.currency as Currency) ?? "BRL";
-    const displayedAmount = convertAmount(Number(s.sale_amount), saleCurr, display, fx);
+    const saleCurr = String(s.currency ?? "BRL");
+    const displayedAmount = convertAnyToDisplay(Number(s.sale_amount), saleCurr, display, fx, fxTable);
     return {
       ...s,
       sale_amount: displayedAmount,
