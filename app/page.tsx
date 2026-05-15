@@ -4,9 +4,7 @@ import { resolveRange } from "@/lib/dateRange";
 import { TopBar } from "@/components/TopBar";
 import { KPICard } from "@/components/KPICard";
 import { HourlyPerformanceChart } from "@/components/HourlyPerformanceChart";
-import { SalesFeed } from "@/components/SalesFeed";
 import { FunnelStrip } from "@/components/FunnelStrip";
-import { AdsTable } from "@/components/AdsTable";
 import { MockBanner } from "@/components/MockBanner";
 import { DateRangeFilter } from "@/components/DateRangeFilter";
 
@@ -27,40 +25,6 @@ export default async function Page({
   const revenueSeries = data.daily.map((d) => d.revenue);
   const roasSeries = data.daily.map((d) => d.revenue / Math.max(1, d.spend));
   const profitSeries = data.daily.map((d) => d.revenue - d.spend);
-
-  // Adapta o shape dos dados pros componentes existentes
-  const chartData = data.daily.map((d) => ({
-    date: d.date,
-    label: formatDayLabel(d.date),
-    spend: d.spend,
-    revenue: d.revenue,
-    sales: d.sales,
-  }));
-
-  const adsRows = data.ads.map((a) => ({
-    campaign: a.campaign_name,
-    adset: a.adset_name,
-    ad: a.ad_name,
-    adId: a.ad_id,
-    spend: a.spend,
-    impressions: a.impressions,
-    linkClicks: a.link_clicks,
-    pageViews: a.landing_page_views,
-    initiateCheckouts: a.initiate_checkouts,
-    sales: a.sales,
-    revenue: a.revenue,
-  }));
-
-  const salesRows = data.recent_sales.map((s) => ({
-    id: s.transaction_id ?? s.id,
-    product: s.product_name,
-    amount: s.sale_amount,
-    status: s.status as "approved" | "pending" | "refunded",
-    utmContent: s.utm_content ?? "",
-    campaign: s.campaign_name ?? "—",
-    ad: s.ad_name ?? "sem vínculo",
-    when: s.sale_date ? formatHourMin(s.sale_date) : "—",
-  }));
 
   const roas = t.spend > 0 ? t.revenue / t.spend : 0;
   const cpa = t.sales > 0 ? t.spend / t.sales : 0;
@@ -189,26 +153,14 @@ export default async function Page({
               />
             </section>
 
-            {/* Chart + Feed */}
-            <section className="px-4 sm:px-6 lg:px-8 pb-5 sm:pb-6">
-              <div className="grid grid-cols-1 xl:grid-cols-3 gap-4 sm:gap-5 items-stretch">
-                <div className="xl:col-span-2">
-                  <HourlyPerformanceChart
-                    data={data.hourly ?? []}
-                    currency={data.currency}
-                    rangeLabel={range.label}
-                    maxHour={data.current_hour}
-                  />
-                </div>
-                <div className="xl:col-span-1 h-full">
-                  <SalesFeed sales={salesRows} currency={data.currency} />
-                </div>
-              </div>
-            </section>
-
-            {/* Big table */}
+            {/* Chart */}
             <section className="px-4 sm:px-6 lg:px-8 pb-8 sm:pb-10">
-              <AdsTable rows={adsRows} currency={data.currency} />
+              <HourlyPerformanceChart
+                data={data.hourly ?? []}
+                currency={data.currency}
+                rangeLabel={range.label}
+                maxHour={data.current_hour}
+              />
             </section>
           </>
         )}
@@ -290,12 +242,3 @@ function StatTile({ label, value, hint, tint, icon }: { label: string; value: st
   );
 }
 
-function formatDayLabel(iso: string) {
-  const d = new Date(iso);
-  return `${String(d.getDate()).padStart(2, "0")}/${String(d.getMonth() + 1).padStart(2, "0")}`;
-}
-
-function formatHourMin(iso: string) {
-  const d = new Date(iso);
-  return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
-}
