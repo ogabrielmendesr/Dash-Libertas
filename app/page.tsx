@@ -3,7 +3,7 @@ import { formatMoney, formatInt, formatDecimal } from "@/lib/currency";
 import { resolveRange } from "@/lib/dateRange";
 import { TopBar } from "@/components/TopBar";
 import { KPICard } from "@/components/KPICard";
-import { HourlyPerformanceChart } from "@/components/HourlyPerformanceChart";
+import { HourlyProfitChart } from "@/components/HourlyProfitChart";
 import { FunnelStrip } from "@/components/FunnelStrip";
 import { MockBanner } from "@/components/MockBanner";
 import { DateRangeFilter } from "@/components/DateRangeFilter";
@@ -179,7 +179,7 @@ export default async function Page({
 
         {/* Chart */}
         <section className="px-4 sm:px-6 lg:px-8 pb-8 sm:pb-10">
-          <HourlyPerformanceChart
+          <HourlyProfitChart
             data={data.hourly ?? []}
             currency={data.currency}
             rangeLabel={range.label}

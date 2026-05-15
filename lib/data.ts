@@ -382,17 +382,16 @@ export async function fetchDashboard(
     hourRevenueBuckets[hourNum] += saleAmountInDisplay(s as any, display, fx, fxTable);
   }
 
-  let spendCum = 0;
-  let revCum = 0;
+  // ⚠ Cada bucket é POR HORA (não cumulativo) pro gráfico de barras de lucro
   const hourly: HourlyPoint[] = Array.from({ length: 24 }, (_, h) => {
-    spendCum += spendPerHourBucket;
-    revCum += hourRevenueBuckets[h];
+    const spendH = spendPerHourBucket;
+    const revH = hourRevenueBuckets[h];
     return {
       hour: h,
       label: `${String(h).padStart(2, "0")}:00`,
-      spend: spendCum,
-      revenue: revCum,
-      profit: revCum - spendCum,
+      spend: spendH,
+      revenue: revH,
+      profit: revH - spendH,
     };
   });
 
