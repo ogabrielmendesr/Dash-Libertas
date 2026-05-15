@@ -45,7 +45,7 @@ export function VendasClient({ initial, currency }: { initial: SalesData; curren
             label="Vinculadas a anúncio"
             value={formatInt(initial.totals.linked, currency)}
             tone="violet"
-            sub={`${initial.sales.length - initial.totals.linked} órfãs`}
+            sub={`${Math.max(0, initial.totals.approved - initial.totals.linked)} sem vínculo`}
           />
           <Mini label="Total estornado" value={formatMoney(initial.totals.refunded, currency)} tone="amber" />
         </div>

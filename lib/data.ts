@@ -644,9 +644,14 @@ export async function fetchSales(
   const products = Array.from(new Set(enriched.map((s) => s.product_name).filter(Boolean)));
   const totals = enriched.reduce(
     (a, s) => {
-      if (s.status === "approved") { a.revenue += s.sale_amount; a.approved += 1; }
-      else if (s.status === "refunded") a.refunded += s.sale_amount;
-      if (s.ad_name) a.linked += 1;
+      if (s.status === "approved") {
+        a.revenue += s.sale_amount;
+        a.approved += 1;
+        // "Vinculadas a anúncio" = aprovadas que vieram de um anúncio rastreável
+        if (s.ad_name) a.linked += 1;
+      } else if (s.status === "refunded") {
+        a.refunded += s.sale_amount;
+      }
       return a;
     },
     { revenue: 0, refunded: 0, approved: 0, linked: 0 }
