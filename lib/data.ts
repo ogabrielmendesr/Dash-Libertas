@@ -61,6 +61,9 @@ async function getFxTable(): Promise<Map<string, number>> {
  * Converte um valor de qualquer moeda regional pra display (BRL ou USD).
  * 1) moeda → USD (dividindo pela rate)
  * 2) USD → display (via convertAmount)
+ *
+ * FALLBACK: usado quando não temos os valores convertidos pela Hotmart.
+ * Quando temos `producer_amount_brl`/`producer_amount_usd`, preferimos esses.
  */
 function convertAnyToDisplay(
   value: number,
@@ -73,6 +76,36 @@ function convertAnyToDisplay(
   const rate = fxTable.get(fromCurrency) ?? 1;
   const inUsd = value / (rate || 1);
   return convertAmount(inUsd, "USD", display, fxUsdBrl);
+}
+
+/**
+ * Retorna o valor da venda na moeda do display, preferindo os valores que a
+ * Hotmart já enviou convertidos (mais precisos que nossa tabela fx_rates).
+ *
+ * Prioridade:
+ *  - BRL: producer_amount_brl  > fallback (converte sale_amount × fx_rates × fxUsdBrl)
+ *  - USD: producer_amount_usd  > fallback
+ */
+function saleAmountInDisplay(
+  s: {
+    sale_amount: number;
+    currency: string | null;
+    producer_amount_brl?: number | null;
+    producer_amount_usd?: number | null;
+  },
+  display: Currency,
+  fxUsdBrl: number,
+  fxTable: Map<string, number>
+): number {
+  if (display === "BRL" && s.producer_amount_brl != null) {
+    return Number(s.producer_amount_brl);
+  }
+  if (display === "USD" && s.producer_amount_usd != null) {
+    return Number(s.producer_amount_usd);
+  }
+  // Fallback: converte pelo nosso fx_rates (vendas antigas sem producer fields)
+  const saleCurr = String(s.currency ?? "BRL");
+  return convertAnyToDisplay(Number(s.sale_amount), saleCurr, display, fxUsdBrl, fxTable);
 }
 
 // ============================================================
@@ -132,7 +165,7 @@ export async function fetchDashboard(
   // 2) Vendas no período (TODAS, cruzaremos depois)
   const { data: salesRange } = await sb
     .from("sales")
-    .select("utm_content, sale_amount, currency, status, sale_date")
+    .select("utm_content, sale_amount, currency, producer_amount_usd, producer_amount_brl, status, sale_date")
     .gte("sale_date", `${sinceStr}T00:00:00-03:00`)
     .lte("sale_date", `${untilStr}T23:59:59.999-03:00`);
 
@@ -140,8 +173,7 @@ export async function fetchDashboard(
   const salesByAd = new Map<string, { count: number; revenue: number }>();
   for (const s of salesRange ?? []) {
     if (s.status !== "approved" || !s.utm_content) continue;
-    const saleCurr = String(s.currency ?? "BRL");
-    const revInDisplay = convertAnyToDisplay(Number(s.sale_amount), saleCurr, display, fx, fxTable);
+    const revInDisplay = saleAmountInDisplay(s as any, display, fx, fxTable);
     const prev = salesByAd.get(s.utm_content) ?? { count: 0, revenue: 0 };
     prev.count += 1;
     prev.revenue += revInDisplay;
@@ -279,7 +311,7 @@ export async function fetchDashboard(
 
   const { data: salesInRange } = await sb
     .from("sales")
-    .select("sale_amount, currency, sale_date, status")
+    .select("sale_amount, currency, producer_amount_usd, producer_amount_brl, sale_date, status")
     .gte("sale_date", `${sinceStr}T00:00:00-03:00`)
     .lte("sale_date", `${untilStr}T23:59:59.999-03:00`);
 
@@ -294,8 +326,7 @@ export async function fetchDashboard(
     }).format(d);
     const hourNum = parseInt(hourStr, 10);
     if (!Number.isFinite(hourNum) || hourNum < 0 || hourNum > 23) continue;
-    const saleCurr = String(s.currency ?? "BRL");
-    hourRevenueBuckets[hourNum] += convertAnyToDisplay(Number(s.sale_amount), saleCurr, display, fx, fxTable);
+    hourRevenueBuckets[hourNum] += saleAmountInDisplay(s as any, display, fx, fxTable);
   }
 
   let spendCum = 0;
@@ -329,7 +360,7 @@ export async function fetchDashboard(
   // Recent sales — sem filtrar por moeda, com conversão por venda
   const { data: recentSales } = await sb
     .from("sales")
-    .select("id, transaction_id, status, product_name, sale_amount, currency, utm_content, sale_date")
+    .select("id, transaction_id, status, product_name, sale_amount, currency, producer_amount_usd, producer_amount_brl, utm_content, sale_date")
     .order("sale_date", { ascending: false })
     .limit(24);
 
@@ -337,7 +368,7 @@ export async function fetchDashboard(
   const recent_sales = (recentSales ?? []).map((s) => {
     const ad = s.utm_content ? adById.get(s.utm_content) : undefined;
     const saleCurr = String(s.currency ?? "BRL");
-    const displayedAmount = convertAnyToDisplay(Number(s.sale_amount), saleCurr, display, fx, fxTable);
+    const displayedAmount = saleAmountInDisplay(s as any, display, fx, fxTable);
     return {
       id: s.id,
       transaction_id: s.transaction_id,
@@ -412,15 +443,14 @@ export async function fetchCampaigns(
   // Vendas no período
   const { data: salesRange } = await sb
     .from("sales")
-    .select("utm_content, sale_amount, currency, status")
+    .select("utm_content, sale_amount, currency, producer_amount_usd, producer_amount_brl, status")
     .gte("sale_date", `${sinceStr}T00:00:00-03:00`)
     .lte("sale_date", `${untilStr}T23:59:59.999-03:00`);
 
   const salesByAd = new Map<string, { count: number; revenue: number }>();
   for (const s of salesRange ?? []) {
     if (s.status !== "approved" || !s.utm_content) continue;
-    const saleCurr = String(s.currency ?? "BRL");
-    const revInDisplay = convertAnyToDisplay(Number(s.sale_amount), saleCurr, display, fx, fxTable);
+    const revInDisplay = saleAmountInDisplay(s as any, display, fx, fxTable);
     const prev = salesByAd.get(s.utm_content) ?? { count: 0, revenue: 0 };
     prev.count += 1;
     prev.revenue += revInDisplay;
@@ -520,7 +550,7 @@ export async function fetchSales(
   const sb = supabaseAdmin();
   let q = sb
     .from("sales")
-    .select("id, transaction_id, status, product_name, sale_amount, currency, utm_content, sale_date, buyer_email")
+    .select("id, transaction_id, status, product_name, sale_amount, currency, producer_amount_usd, producer_amount_brl, utm_content, sale_date, buyer_email")
     .order("sale_date", { ascending: false })
     .limit(200);
 
@@ -543,7 +573,7 @@ export async function fetchSales(
 
   const enriched = (sales ?? []).map((s) => {
     const saleCurr = String(s.currency ?? "BRL");
-    const displayedAmount = convertAnyToDisplay(Number(s.sale_amount), saleCurr, display, fx, fxTable);
+    const displayedAmount = saleAmountInDisplay(s as any, display, fx, fxTable);
     return {
       ...s,
       sale_amount: displayedAmount,

@@ -151,6 +151,30 @@ export function extractSaleRow(payload: HotmartWebhook) {
       ? parseFloat(purchase.commission.value)
       : purchase.commission?.value;
 
+  // ⚠ Receita real do produtor (já convertida pela Hotmart com câmbio real)
+  // commissions[source=PRODUCER]:
+  //   value                              = Faturamento líquido (USD geralmente)
+  //   currency_conversion.converted_value = "Valor que você recebeu convertido" (BRL)
+  //   currency_conversion.conversion_rate = câmbio que a Hotmart usou
+  const commissions = (payload.data as any).commissions as Array<any> | undefined;
+  const producer = (commissions ?? []).find((c) => c?.source === "PRODUCER");
+  const producerAmountUsd = producer
+    ? typeof producer.value === "string"
+      ? parseFloat(producer.value)
+      : Number(producer.value)
+    : null;
+  const producerAmountBrl =
+    producer?.currency_conversion?.converted_to_currency === "BRL"
+      ? typeof producer.currency_conversion.converted_value === "string"
+        ? parseFloat(producer.currency_conversion.converted_value)
+        : Number(producer.currency_conversion.converted_value)
+      : null;
+  const producerFxRate = producer?.currency_conversion?.conversion_rate
+    ? typeof producer.currency_conversion.conversion_rate === "string"
+      ? parseFloat(producer.currency_conversion.conversion_rate)
+      : Number(producer.currency_conversion.conversion_rate)
+    : null;
+
   const orderDateMs = purchase.order_date ?? purchase.approved_date ?? Date.now();
 
   // ⚠ Hotmart pode entregar o ad_id em 2 lugares:
@@ -171,6 +195,9 @@ export function extractSaleRow(payload: HotmartWebhook) {
     commission_amount: Number.isFinite(commissionValue as number)
       ? (commissionValue as number)
       : null,
+    producer_amount_usd: Number.isFinite(producerAmountUsd as number) ? producerAmountUsd : null,
+    producer_amount_brl: Number.isFinite(producerAmountBrl as number) ? producerAmountBrl : null,
+    producer_fx_rate: Number.isFinite(producerFxRate as number) ? producerFxRate : null,
     currency: purchase.price?.currency_value ?? "BRL",
     utm_content: utmContent,
     utm_source: tracking?.utm_source ?? (origin?.src ? "facebook" : null),
