@@ -31,8 +31,6 @@ export default async function Page({
   const ticket = t.sales > 0 ? t.revenue / t.sales : 0;
   const profit = t.revenue - t.spend;
 
-  const hasData = t.spend > 0 || t.revenue > 0;
-
   return (
     <main className="relative min-h-screen">
       <div className="aurora" aria-hidden />
@@ -85,115 +83,109 @@ export default async function Page({
           </div>
         </section>
 
-        {!hasData ? (
-          <EmptyState />
-        ) : (
-          <>
-            {/* KPI grid */}
-            <section className="px-4 sm:px-6 lg:px-8 pb-5 sm:pb-6">
-              <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4 sm:gap-5">
-                <KPICard
-                  label="Investido"
-                  value={formatMoney(t.spend, data.currency)}
-                  caption="vs. período anterior"
-                  data={spendSeries.length > 0 ? spendSeries : [0]}
-                  tint="amber"
-                />
-                <KPICard
-                  label="Receita"
-                  value={formatMoney(t.revenue, data.currency)}
-                  caption="vendas aprovadas · Hotmart"
-                  data={revenueSeries.length > 0 ? revenueSeries : [0]}
-                  tint="mint"
-                />
-                <KPICard
-                  label="ROAS"
-                  value={`${formatDecimal(roas, 2, data.currency)}×`}
-                  caption="receita ÷ investido"
-                  data={roasSeries.length > 0 ? roasSeries : [0]}
-                  tint="azure"
-                />
-                <KPICard
-                  label="Lucro"
-                  value={formatMoney(profit, data.currency)}
-                  caption="receita − investido"
-                  data={profitSeries.length > 0 ? profitSeries : [0]}
-                  tint="violet"
-                />
-              </div>
-            </section>
+        {/* KPI grid */}
+        <section className="px-4 sm:px-6 lg:px-8 pb-5 sm:pb-6">
+          <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4 sm:gap-5">
+            <KPICard
+              label="Investido"
+              value={formatMoney(t.spend, data.currency)}
+              caption="vs. período anterior"
+              data={spendSeries.length > 0 ? spendSeries : [0]}
+              tint="amber"
+            />
+            <KPICard
+              label="Receita"
+              value={formatMoney(t.revenue, data.currency)}
+              caption="vendas aprovadas · Hotmart"
+              data={revenueSeries.length > 0 ? revenueSeries : [0]}
+              tint="mint"
+            />
+            <KPICard
+              label="ROAS"
+              value={`${formatDecimal(roas, 2, data.currency)}×`}
+              caption="receita ÷ investido"
+              data={roasSeries.length > 0 ? roasSeries : [0]}
+              tint="azure"
+            />
+            <KPICard
+              label="Lucro"
+              value={formatMoney(profit, data.currency)}
+              caption="receita − investido"
+              data={profitSeries.length > 0 ? profitSeries : [0]}
+              tint="violet"
+            />
+          </div>
+        </section>
 
-            {/* Mini stats strip */}
-            <section className="px-4 sm:px-6 lg:px-8 pb-5 sm:pb-6">
-              <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3 sm:gap-4">
-                <StatTile
-                  label="CPA"
-                  value={formatMoney(cpa, data.currency)}
-                  hint="custo por aquisição"
-                  tint="teal"
-                  icon="◎"
-                />
-                <StatTile
-                  label="Ticket médio"
-                  value={formatMoney(ticket, data.currency)}
-                  hint="receita ÷ vendas"
-                  tint="violet"
-                  icon="✦"
-                />
-                <StatTile
-                  label="ARPU"
-                  value={formatMoney(data.arpu ?? 0, data.currency)}
-                  hint={`${formatInt(data.unique_buyers ?? 0, data.currency)} compradores únicos`}
-                  tint="azure"
-                  icon="✪"
-                />
-                <StatTile
-                  label="Vendas"
-                  value={formatInt(t.sales, data.currency)}
-                  hint="apenas aprovadas"
-                  tint="mint"
-                  icon="↑"
-                />
-                <StatTile
-                  label="Taxa de aprovação"
-                  value={`${((data.approval_rate ?? 1) * 100).toFixed(1)}%`}
-                  hint={
-                    (data.method_breakdown ?? []).slice(0, 2).length > 0
-                      ? (data.method_breakdown ?? [])
-                          .slice(0, 2)
-                          .map((m) => `${prettifyMethod(m.method)} ${(m.rate * 100).toFixed(0)}%`)
-                          .join(" · ")
-                      : "por método de pagamento"
-                  }
-                  tint="amber"
-                  icon="◐"
-                />
-              </div>
-            </section>
+        {/* Mini stats strip */}
+        <section className="px-4 sm:px-6 lg:px-8 pb-5 sm:pb-6">
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3 sm:gap-4">
+            <StatTile
+              label="CPA"
+              value={formatMoney(cpa, data.currency)}
+              hint="custo por aquisição"
+              tint="teal"
+              icon="◎"
+            />
+            <StatTile
+              label="Ticket médio"
+              value={formatMoney(ticket, data.currency)}
+              hint="receita ÷ vendas"
+              tint="violet"
+              icon="✦"
+            />
+            <StatTile
+              label="ARPU"
+              value={formatMoney(data.arpu ?? 0, data.currency)}
+              hint={`${formatInt(data.unique_buyers ?? 0, data.currency)} compradores únicos`}
+              tint="azure"
+              icon="✪"
+            />
+            <StatTile
+              label="Vendas"
+              value={formatInt(t.sales, data.currency)}
+              hint="apenas aprovadas"
+              tint="mint"
+              icon="↑"
+            />
+            <StatTile
+              label="Taxa de aprovação"
+              value={`${((data.approval_rate ?? 1) * 100).toFixed(1)}%`}
+              hint={
+                (data.method_breakdown ?? []).slice(0, 2).length > 0
+                  ? (data.method_breakdown ?? [])
+                      .slice(0, 2)
+                      .map((m) => `${prettifyMethod(m.method)} ${(m.rate * 100).toFixed(0)}%`)
+                      .join(" · ")
+                  : "por método de pagamento"
+              }
+              tint="amber"
+              icon="◐"
+            />
+          </div>
+        </section>
 
-            {/* Funnel */}
-            <section className="px-4 sm:px-6 lg:px-8 pb-5 sm:pb-6">
-              <FunnelStrip
-                impressions={t.impressions}
-                linkClicks={t.link_clicks}
-                pageViews={t.landing_page_views}
-                checkouts={t.initiate_checkouts}
-                sales={t.sales}
-                currency={data.currency}
-              />
-            </section>
+        {/* Funnel */}
+        <section className="px-4 sm:px-6 lg:px-8 pb-5 sm:pb-6">
+          <FunnelStrip
+            impressions={t.impressions}
+            linkClicks={t.link_clicks}
+            pageViews={t.landing_page_views}
+            checkouts={t.initiate_checkouts}
+            sales={t.sales}
+            currency={data.currency}
+          />
+        </section>
 
-            {/* Chart */}
-            <section className="px-4 sm:px-6 lg:px-8 pb-8 sm:pb-10">
-              <HourlyPerformanceChart
-                data={data.hourly ?? []}
-                currency={data.currency}
-                rangeLabel={range.label}
-                maxHour={data.current_hour}
-              />
-            </section>
-          </>
-        )}
+        {/* Chart */}
+        <section className="px-4 sm:px-6 lg:px-8 pb-8 sm:pb-10">
+          <HourlyPerformanceChart
+            data={data.hourly ?? []}
+            currency={data.currency}
+            rangeLabel={range.label}
+            maxHour={data.current_hour}
+          />
+        </section>
 
         {/* Footer */}
         <footer className="px-4 sm:px-6 lg:px-8 pb-8 sm:pb-10">
@@ -211,29 +203,6 @@ export default async function Page({
         </footer>
       </div>
     </main>
-  );
-}
-
-function EmptyState() {
-  return (
-    <section className="px-4 sm:px-6 lg:px-8 pb-10">
-      <div className="glass glass-tinted-violet sheen p-8 sm:p-12 text-center max-w-2xl mx-auto">
-        <div className="font-display text-[28px] sm:text-[34px] text-white leading-tight">
-          <span className="italic text-white/70">Nenhum dado ainda.</span>{" "}
-          <span className="text-grad-aurora">Vamos conectar?</span>
-        </div>
-        <p className="mt-4 text-[14px] text-white/65 max-w-md mx-auto">
-          Você ainda não conectou o Meta nem recebeu vendas pelo webhook. Comece pelas configurações.
-        </p>
-        <a
-          href="/configuracoes"
-          className="btn-glass btn-primary text-[13px] px-5 py-2.5 rounded-xl inline-flex items-center gap-2 mt-6"
-        >
-          Ir para Configurações
-          <span>→</span>
-        </a>
-      </div>
-    </section>
   );
 }
 
