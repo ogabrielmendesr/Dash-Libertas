@@ -5,6 +5,7 @@ import { DateRangeFilter } from "@/components/DateRangeFilter";
 import { fetchCampaigns } from "@/lib/data";
 import { resolveRange } from "@/lib/dateRange";
 import { CampanhasClient } from "./CampanhasClient";
+import { SyncButton } from "./SyncButton";
 import { formatMoney, formatInt, formatDecimal } from "@/lib/currency";
 
 export const dynamic = "force-dynamic";
@@ -52,9 +53,7 @@ export default async function Page({
               since={range.since}
               until={range.until}
             />
-            <a href="/configuracoes" className="btn-glass btn-primary text-[13px] px-4 py-2 rounded-xl">
-              Sincronizar
-            </a>
+            <SyncButton />
           </>
         }
       />

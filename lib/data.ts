@@ -191,6 +191,24 @@ export async function fetchDashboard(
     salesByAd.set(s.utm_content, prev);
   }
 
+  // Vendas aprovadas sem atribuição: sem utm_content ou com UTM que não bate em nenhum ad_id nos insights do período
+  const adIdsInInsights = new Set((insightRows ?? []).map((r: any) => r.ad_id as string));
+  const organicByDay = new Map<string, { revenue: number; sales: number }>();
+  let organicTotalRevenue = 0;
+  let organicTotalSales = 0;
+  for (const s of salesRange ?? []) {
+    if (s.status !== "approved") continue;
+    if (s.utm_content && adIdsInInsights.has(s.utm_content)) continue;
+    const revInDisplay = saleAmountInDisplay(s as any, display, fx, fxTable);
+    const dayKey = new Intl.DateTimeFormat("sv-SE", { timeZone: "America/Sao_Paulo" }).format(new Date(s.sale_date));
+    const prev = organicByDay.get(dayKey) ?? { revenue: 0, sales: 0 };
+    prev.revenue += revInDisplay;
+    prev.sales += 1;
+    organicByDay.set(dayKey, prev);
+    organicTotalRevenue += revInDisplay;
+    organicTotalSales += 1;
+  }
+
   // 4) Construir o "list" no formato esperado, cruzando insight + vendas por ad_id apenas
   type InsightRow = {
     ad_id: string; ad_name: string;
@@ -243,6 +261,13 @@ export async function fetchDashboard(
     prev.revenue += r.revenue_disp;
     prev.sales += r.sales_total;
     byDay.set(key, prev);
+  }
+  // Injeta receita orgânica/não-atribuída nos buckets diários
+  for (const [day, org] of organicByDay) {
+    const prev = byDay.get(day) ?? { date: day, spend: 0, revenue: 0, sales: 0 };
+    prev.revenue += org.revenue;
+    prev.sales += org.sales;
+    byDay.set(day, prev);
   }
   const daily = Array.from(byDay.values()).sort((a, b) => a.date.localeCompare(b.date));
 
@@ -297,7 +322,7 @@ export async function fetchDashboard(
   }
   const ads = Array.from(byAd.values()).sort((a, b) => b.revenue - a.revenue);
 
-  const totals = ads.reduce(
+  const adTotals = ads.reduce(
     (a, r) => ({
       spend: a.spend + r.spend,
       impressions: a.impressions + r.impressions,
@@ -309,6 +334,11 @@ export async function fetchDashboard(
     }),
     { spend: 0, impressions: 0, link_clicks: 0, landing_page_views: 0, initiate_checkouts: 0, sales: 0, revenue: 0 }
   );
+  const totals = {
+    ...adTotals,
+    revenue: adTotals.revenue + organicTotalRevenue,
+    sales: adTotals.sales + organicTotalSales,
+  };
 
   // ============================================================
   // ARPU + Taxa de aprovação por método de pagamento
@@ -362,14 +392,8 @@ export async function fetchDashboard(
   const daysCount = computeDays(sinceStr, untilStr);
   const spendPerHourBucket = daysCount > 0 ? totalSpendDisp / 24 : 0; // cada hora-do-dia abrange "daysCount" dias
 
-  const { data: salesInRange } = await sb
-    .from("sales")
-    .select("sale_amount, currency, producer_amount_usd, producer_amount_brl, sale_date, status")
-    .gte("sale_date", `${sinceStr}T00:00:00-03:00`)
-    .lte("sale_date", `${untilStr}T23:59:59.999-03:00`);
-
   const hourRevenueBuckets = Array.from({ length: 24 }, () => 0);
-  for (const s of salesInRange ?? []) {
+  for (const s of salesRange ?? []) {
     if (s.status !== "approved") continue;
     const d = new Date(s.sale_date);
     const hourStr = new Intl.DateTimeFormat("pt-BR", {
@@ -545,6 +569,35 @@ export async function fetchCampaigns(
     if (sales) {
       ad.agg.sales = sales.count;
       ad.agg.revenue = sales.revenue;
+    }
+  }
+
+  // Vendas de anúncios sem insight no período (anúncio parou de gastar, mas gerou venda hoje por atribuição de clique)
+  const enabledIdSet = new Set(enabledIds2);
+  const orphanAdIds: string[] = [];
+  for (const adId of salesByAd.keys()) {
+    if (!adsByAdId.has(adId)) orphanAdIds.push(adId);
+  }
+  if (orphanAdIds.length > 0) {
+    const { data: orphanMeta } = await sb
+      .from("fb_ad_insights")
+      .select("ad_id, ad_name, adset_id, adset_name, campaign_id, campaign_name, ad_account_id")
+      .in("ad_id", orphanAdIds)
+      .order("date", { ascending: false });
+    const seenOrphans = new Set<string>();
+    for (const r of (orphanMeta ?? []) as any[]) {
+      if (seenOrphans.has(r.ad_id) || !enabledIdSet.has(r.ad_account_id)) continue;
+      seenOrphans.add(r.ad_id);
+      const sales = salesByAd.get(r.ad_id)!;
+      adsByAdId.set(r.ad_id, {
+        ad_id: r.ad_id,
+        ad_name: r.ad_name,
+        adset_id: r.adset_id,
+        adset_name: r.adset_name,
+        campaign_id: r.campaign_id,
+        campaign_name: r.campaign_name,
+        agg: { ...empty(), sales: sales.count, revenue: sales.revenue },
+      });
     }
   }
 
