@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabase";
 import { fetchAdInsights, extractActions, MetaApiError } from "@/lib/meta";
+import { brDateStr } from "@/lib/dateRange";
 
 /**
  * Sincroniza insights de TODAS as contas com is_enabled = true.
@@ -41,13 +42,11 @@ export async function POST(req: Request) {
     );
   }
 
-  // 3) Calcula intervalo
-  const until = new Date();
-  const since = new Date();
-  since.setDate(since.getDate() - (days - 1));
-  const fmt = (d: Date) => d.toISOString().slice(0, 10);
-  const sinceStr = fmt(since);
-  const untilStr = fmt(until);
+  // 3) Calcula intervalo em timezone BR (Vercel roda em UTC — toISOString daria data errada após 21h BR)
+  const untilStr = brDateStr(new Date());
+  const sinceDate = new Date(untilStr + "T12:00:00Z");
+  sinceDate.setUTCDate(sinceDate.getUTCDate() - (days - 1));
+  const sinceStr = sinceDate.toISOString().slice(0, 10);
 
   let totalRecords = 0;
   const results: Array<{ account: string; records: number; error?: string }> = [];

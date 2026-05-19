@@ -18,10 +18,19 @@ export function brDateStr(d: Date): string {
   }).format(d);
 }
 
+/**
+ * Desloca um YYYY-MM-DD por N dias sem risco de bug de timezone.
+ * Usa meio-dia UTC para evitar que a conversão para BR cruce a meia-noite.
+ */
+function shiftBrDate(isoDate: string, deltaDays: number): string {
+  const d = new Date(isoDate + "T12:00:00Z");
+  d.setUTCDate(d.getUTCDate() + deltaDays);
+  return d.toISOString().slice(0, 10);
+}
+
 function parseLocal(iso: string): Date {
-  // "2026-05-14" → meia-noite local
-  const [y, m, d] = iso.split("-").map(Number);
-  return new Date(y, (m ?? 1) - 1, d ?? 1);
+  // Usa UTC noon para que a diferença em ms seja sempre exata em dias inteiros
+  return new Date(iso + "T12:00:00Z");
 }
 
 /**
@@ -34,7 +43,7 @@ export function resolveRange(
 ): { preset: RangePreset; since: string; until: string; label: string; days: number } {
   const now = new Date();
   const todayStr = brDateStr(now);
-  const [todayY, todayM, todayD] = todayStr.split("-").map(Number);
+  const [todayY, todayM] = todayStr.split("-").map(Number);
 
   let preset = (sp.preset as RangePreset) || "today";
   let since: string;
@@ -43,14 +52,12 @@ export function resolveRange(
 
   switch (preset) {
     case "yesterday": {
-      const y = new Date(todayY, todayM - 1, todayD - 1);
-      since = until = brDateStr(y);
+      since = until = shiftBrDate(todayStr, -1);
       label = "Ontem";
       break;
     }
     case "last_7_days": {
-      const start = new Date(todayY, todayM - 1, todayD - 6);
-      since = brDateStr(start);
+      since = shiftBrDate(todayStr, -6);
       until = todayStr;
       label = "Últimos 7 dias";
       break;
@@ -62,13 +69,12 @@ export function resolveRange(
       break;
     }
     case "last_month": {
-      // último dia do mês anterior
-      const lastDayPrev = new Date(todayY, todayM - 1, 0);
-      const ly = lastDayPrev.getFullYear();
-      const lm = String(lastDayPrev.getMonth() + 1).padStart(2, "0");
-      const ld = String(lastDayPrev.getDate()).padStart(2, "0");
-      since = `${ly}-${lm}-01`;
-      until = `${ly}-${lm}-${ld}`;
+      // último dia do mês anterior = primeiro dia deste mês - 1 dia
+      const thisMonthFirst = `${todayY}-${String(todayM).padStart(2, "0")}-01`;
+      const lastDayPrevStr = shiftBrDate(thisMonthFirst, -1);
+      const [lpy, lpm] = lastDayPrevStr.split("-");
+      since = `${lpy}-${lpm}-01`;
+      until = lastDayPrevStr;
       label = "Mês passado";
       break;
     }
