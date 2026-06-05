@@ -7,7 +7,7 @@
  */
 
 import { supabaseAdmin, useMockData } from "./supabase";
-import { mockDashboard, mockSales, mockCampaigns } from "./mockApi";
+import { mockDashboard, mockSales, mockCampaigns, mockCountrySales } from "./mockApi";
 import { Currency } from "./currency";
 import { convertAmount } from "./fx";
 import { brDateStr } from "./dateRange";
@@ -804,4 +804,62 @@ export async function fetchSales(
     currency: display,
     fx_usd_brl: fx,
   };
+}
+
+// ============================================================
+// fetchCountrySales
+// ============================================================
+
+export type CountrySaleRow = {
+  country_iso: string;
+  country_name: string;
+  sales: number;
+  revenue: number;
+  pct_revenue: number;
+};
+
+export async function fetchCountrySales(
+  range: { since: string; until: string } = defaultRange()
+): Promise<{ rows: CountrySaleRow[]; currency: Currency }> {
+  if (useMockData()) {
+    const { rows } = mockCountrySales();
+    return { rows, currency: "BRL" };
+  }
+
+  const { display_currency: display, fx_usd_brl: fx } = await getSettings();
+  const fxTable = await getFxTable();
+  const sb = supabaseAdmin();
+
+  const { data } = await sb
+    .from("sales")
+    .select("buyer_country, sale_amount, currency, producer_amount_brl, producer_amount_usd, status")
+    .eq("status", "approved")
+    .gte("sale_date", `${range.since}T00:00:00-03:00`)
+    .lte("sale_date", `${range.until}T23:59:59.999-03:00`)
+    .not("buyer_country", "is", null);
+
+  const byCountry = new Map<string, { sales: number; revenue: number }>();
+  for (const s of data ?? []) {
+    const rev = saleAmountInDisplay(s as any, display, fx, fxTable);
+    const prev = byCountry.get(s.buyer_country as string) ?? { sales: 0, revenue: 0 };
+    prev.sales += 1;
+    prev.revenue += rev;
+    byCountry.set(s.buyer_country as string, prev);
+  }
+
+  const totalRevenue = Array.from(byCountry.values()).reduce((a, b) => a + b.revenue, 0);
+  const displayNames = new Intl.DisplayNames(["pt-BR"], { type: "region" });
+
+  const rows = Array.from(byCountry.entries())
+    .map(([iso, { sales, revenue }]) => ({
+      country_iso: iso,
+      country_name: displayNames.of(iso) ?? iso,
+      sales,
+      revenue,
+      pct_revenue: totalRevenue > 0 ? (revenue / totalRevenue) * 100 : 0,
+    }))
+    .sort((a, b) => b.revenue - a.revenue)
+    .slice(0, 15);
+
+  return { rows, currency: display };
 }

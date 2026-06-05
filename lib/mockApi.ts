@@ -210,3 +210,22 @@ export function mockCampaigns() {
 
   return { period: { since: "", until: "", days: 30 }, campaigns };
 }
+
+export function mockCountrySales(): { rows: Array<{ country_iso: string; country_name: string; sales: number; revenue: number; pct_revenue: number }> } {
+  const raw = [
+    { country_iso: "US", country_name: "Estados Unidos", sales: 473, revenue: 35977 },
+    { country_iso: "MX", country_name: "México",         sales: 322, revenue: 15055 },
+    { country_iso: "CL", country_name: "Chile",          sales: 159, revenue: 7403  },
+    { country_iso: "ES", country_name: "Espanha",        sales: 144, revenue: 7204  },
+    { country_iso: "GB", country_name: "Reino Unido",    sales:  31, revenue: 3829  },
+    { country_iso: "CO", country_name: "Colômbia",       sales:  68, revenue: 3113  },
+    { country_iso: "AU", country_name: "Austrália",      sales:  25, revenue: 2945  },
+    { country_iso: "AR", country_name: "Argentina",      sales:  51, revenue: 2604  },
+    { country_iso: "CA", country_name: "Canadá",         sales:  24, revenue: 2238  },
+    { country_iso: "CR", country_name: "Costa Rica",     sales:  43, revenue: 2010  },
+  ];
+  const total = raw.reduce((a, r) => a + r.revenue, 0);
+  return {
+    rows: raw.map((r) => ({ ...r, pct_revenue: (r.revenue / total) * 100 })),
+  };
+}

@@ -91,6 +91,7 @@ export async function POST(req: NextRequest, ctx: { params: { secret: string } }
         sck: row.sck,
         buyer_email: row.buyer_email,
         buyer_name: row.buyer_name,
+        buyer_country: row.buyer_country,
         sale_date: row.sale_date,
         webhook_received_at: new Date().toISOString(),
         raw_payload: json,

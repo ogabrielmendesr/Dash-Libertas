@@ -69,6 +69,11 @@ const HotmartWebhookSchema = z
           .object({
             email: z.string().email().optional().nullable(),
             name: z.string().optional().nullable(),
+            address: z
+              .object({ country_iso: z.string().optional().nullable() })
+              .passthrough()
+              .optional()
+              .nullable(),
           })
           .passthrough()
           .optional()
@@ -239,6 +244,7 @@ export function extractSaleRow(payload: HotmartWebhook) {
     sck: tracking?.source_sck ?? origin?.sck ?? purchase.sck ?? null,
     buyer_email: buyer?.email ?? null,
     buyer_name: buyer?.name ?? null,
+    buyer_country: (buyer?.address as any)?.country_iso ?? null,
     sale_date: new Date(orderDateMs).toISOString(),
   };
 }

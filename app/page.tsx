@@ -1,5 +1,6 @@
-import { fetchDashboard } from "@/lib/data";
+import { fetchDashboard, fetchCountrySales } from "@/lib/data";
 import { formatMoney, formatInt, formatDecimal } from "@/lib/currency";
+import { CountryBreakdown } from "@/components/CountryBreakdown";
 import { resolveRange } from "@/lib/dateRange";
 import { TopBar } from "@/components/TopBar";
 import { KPICard } from "@/components/KPICard";
@@ -17,7 +18,10 @@ export default async function Page({
   searchParams: { preset?: string; since?: string; until?: string };
 }) {
   const range = resolveRange(searchParams);
-  const data = await fetchDashboard({ since: range.since, until: range.until });
+  const [data, countryData] = await Promise.all([
+    fetchDashboard({ since: range.since, until: range.until }),
+    fetchCountrySales({ since: range.since, until: range.until }),
+  ]);
   const t = data.totals;
 
   // Séries para os sparklines
@@ -178,13 +182,18 @@ export default async function Page({
         </section>
 
         {/* Chart */}
-        <section className="px-4 sm:px-6 lg:px-8 pb-8 sm:pb-10">
+        <section className="px-4 sm:px-6 lg:px-8 pb-5 sm:pb-6">
           <HourlyProfitChart
             data={data.hourly ?? []}
             currency={data.currency}
             rangeLabel={range.label}
             maxHour={data.current_hour}
           />
+        </section>
+
+        {/* Country breakdown */}
+        <section className="px-4 sm:px-6 lg:px-8 pb-8 sm:pb-10">
+          <CountryBreakdown rows={countryData.rows} currency={countryData.currency} />
         </section>
 
         {/* Footer */}
