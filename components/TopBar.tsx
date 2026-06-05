@@ -4,6 +4,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useState } from "react";
 import { CurrencyToggle } from "./CurrencyToggle";
+import { SyncButtonTopBar } from "./SyncButtonTopBar";
 
 const NAV = [
   { href: "/", label: "Painel" },
@@ -82,7 +83,7 @@ export function TopBar() {
                 Webhook
               </span>
             </div>
-            <button className="btn-glass btn-primary text-[13px] px-4 py-2 rounded-xl">Sincronizar</button>
+            <SyncButtonTopBar />
           </div>
 
           {/* Mobile menu toggle */}
@@ -146,9 +147,7 @@ export function TopBar() {
                 <span className="text-[11px] font-mono uppercase tracking-[0.16em] text-white/80">Webhook</span>
               </div>
             </div>
-            <button className="btn-glass btn-primary text-[13px] px-4 py-2 rounded-xl w-full">
-              Sincronizar agora
-            </button>
+            <SyncButtonTopBar className="w-full" />
           </div>
         )}
       </div>

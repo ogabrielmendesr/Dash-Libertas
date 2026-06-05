@@ -127,3 +127,79 @@ export function extractActions(actions: FbInsightRow["actions"] = []) {
       get("initiate_checkout") || get("offsite_conversion.fb_pixel_initiate_checkout") || get("onsite_conversion.initiate_checkout"),
   };
 }
+
+// ============================================================
+// Campaign Budgets
+// ============================================================
+
+export type FbCampaignBudget = {
+  id: string;               // campaign_id
+  name: string;
+  daily_budget?: string;     // em centavos (Meta retorna "10000" = R$100)
+  lifetime_budget?: string;
+  budget_remaining?: string;
+  configured_status: string;
+};
+
+/**
+ * Busca budgets de todas as campanhas de uma ad account.
+ * A Meta retorna valores em centavos — convertemos pra unidade na camada de dados.
+ */
+export async function fetchCampaignBudgets(opts: {
+  token: string;
+  adAccountId: string;
+}): Promise<FbCampaignBudget[]> {
+  type Resp = { data: FbCampaignBudget[]; paging?: { next?: string } };
+  const all: FbCampaignBudget[] = [];
+  let path = `/${opts.adAccountId}/campaigns`;
+  let firstCall = true;
+
+  while (path) {
+    const params: Record<string, string> = firstCall
+      ? {
+          fields: "id,name,daily_budget,lifetime_budget,budget_remaining,configured_status",
+          limit: "200",
+          filtering: JSON.stringify([{ field: "effective_status", operator: "IN", value: ["ACTIVE", "PAUSED"] }]),
+        }
+      : {};
+    firstCall = false;
+
+    const resp: Resp = await graphFetch(path, params, opts.token);
+    all.push(...resp.data);
+
+    if (resp.paging?.next) {
+      const u = new URL(resp.paging.next);
+      path = u.pathname.replace(/^\/v\d+\.\d+/, "") + u.search;
+    } else {
+      path = "";
+    }
+  }
+
+  return all;
+}
+
+/**
+ * Atualiza o budget de uma campanha na Meta.
+ * `value` deve estar em centavos (ex: R$100 = 10000).
+ * `field` pode ser "daily_budget" ou "lifetime_budget".
+ */
+export async function updateCampaignBudget(opts: {
+  token: string;
+  campaignId: string;
+  field: "daily_budget" | "lifetime_budget";
+  valueCents: number;
+}): Promise<{ success: boolean }> {
+  const qs = new URLSearchParams({
+    [opts.field]: String(opts.valueCents),
+    access_token: opts.token,
+  }).toString();
+
+  const r = await fetch(`${GRAPH}/${opts.campaignId}?${qs}`, {
+    method: "POST",
+    cache: "no-store",
+  });
+
+  const body = await r.json();
+  if (!r.ok) throw new MetaApiError(r.status, body);
+  return body as { success: boolean };
+}

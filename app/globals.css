@@ -261,3 +261,12 @@ html, body { background: var(--bg-base); color: rgba(255,255,255,0.92); }
   50%     { filter: drop-shadow(0 0 14px rgba(255,255,255,0.15)); }
 }
 .count-glow { animation: count-glow 4s ease-in-out infinite; }
+
+/* shake for error feedback */
+@keyframes shake {
+  0%, 100% { transform: translateX(0); }
+  20% { transform: translateX(-4px); }
+  40% { transform: translateX(4px); }
+  60% { transform: translateX(-3px); }
+  80% { transform: translateX(3px); }
+}

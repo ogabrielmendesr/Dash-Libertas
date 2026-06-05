@@ -621,19 +621,49 @@ export async function fetchCampaigns(
     s.ads.set(ad.ad_id, { ad_id: ad.ad_id, ad_name: ad.ad_name, agg: ad.agg });
   }
 
+  // Busca budgets das campanhas
+  const campaignIds = Array.from(tree.keys());
+  const budgetMap = new Map<string, { daily_budget: number | null; lifetime_budget: number | null; budget_remaining: number | null; configured_status: string | null; budget_type: string }>();
+  if (campaignIds.length > 0) {
+    const { data: budgetRows } = await sb
+      .from("fb_campaign_budgets")
+      .select("campaign_id, daily_budget, lifetime_budget, budget_remaining, configured_status, budget_type")
+      .in("campaign_id", campaignIds);
+    for (const b of budgetRows ?? []) {
+      // Converte o budget pra moeda do display (budget está na moeda da ad account)
+      const accId = tree.get(b.campaign_id)?.campaign_id;
+      // Os budgets já foram convertidos de centavos ao salvar no sync
+      budgetMap.set(b.campaign_id, {
+        daily_budget: b.daily_budget != null ? Number(b.daily_budget) : null,
+        lifetime_budget: b.lifetime_budget != null ? Number(b.lifetime_budget) : null,
+        budget_remaining: b.budget_remaining != null ? Number(b.budget_remaining) : null,
+        configured_status: b.configured_status,
+        budget_type: b.budget_type ?? "CBO",
+      });
+    }
+  }
+
   return {
     period: { since: sinceStr, until: untilStr, days: computeDays(sinceStr, untilStr) },
-    campaigns: Array.from(tree.values()).map((c) => ({
-      campaign_id: c.campaign_id,
-      campaign_name: c.campaign_name,
-      agg: c.agg,
-      adsets: Array.from(c.adsets.values()).map((s) => ({
-        adset_id: s.adset_id,
-        adset_name: s.adset_name,
-        agg: s.agg,
-        ads: Array.from(s.ads.values()),
-      })),
-    })),
+    campaigns: Array.from(tree.values()).map((c) => {
+      const budget = budgetMap.get(c.campaign_id);
+      return {
+        campaign_id: c.campaign_id,
+        campaign_name: c.campaign_name,
+        agg: c.agg,
+        adsets: Array.from(c.adsets.values()).map((s) => ({
+          adset_id: s.adset_id,
+          adset_name: s.adset_name,
+          agg: s.agg,
+          ads: Array.from(s.ads.values()),
+        })),
+        daily_budget: budget?.daily_budget ?? null,
+        lifetime_budget: budget?.lifetime_budget ?? null,
+        budget_remaining: budget?.budget_remaining ?? null,
+        configured_status: budget?.configured_status ?? null,
+        budget_type: (budget?.budget_type ?? "CBO") as "CBO" | "ABO",
+      };
+    }),
     mock: false,
     currency: display,
     fx_usd_brl: fx,

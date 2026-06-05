@@ -37,14 +37,14 @@ export function FunnelStrip({
           Funil de conversão
         </div>
         <div className="text-[11px] font-mono text-white/45">
-          Taxa final: <span className="text-white">{((sales / impressions) * 100).toFixed(3)}%</span>
+          Taxa final: <span className="text-white">{impressions > 0 ? ((sales / impressions) * 100).toFixed(3) : "0.000"}%</span>
         </div>
       </div>
 
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
         {stages.map((s, i) => {
           const pct = (s.value / max) * 100;
-          const dropFromPrev = i === 0 ? null : ((stages[i - 1].value - s.value) / stages[i - 1].value) * 100;
+          const dropFromPrev = i === 0 || stages[i - 1].value === 0 ? null : ((stages[i - 1].value - s.value) / stages[i - 1].value) * 100;
           return (
             <div key={s.label} className="relative">
               <div className="flex items-center justify-between mb-1.5">

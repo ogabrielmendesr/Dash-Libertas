@@ -178,6 +178,10 @@ export function mockCampaigns() {
       return next as T;
     }, {} as T);
 
+  const MOCK_BUDGETS: Record<string, number> = {};
+  let bIdx = 0;
+  const BUDGET_VALUES = [50, 80, 100, 150, 200, 120];
+
   const campaigns = Array.from(map.values()).map((c) => {
     const adsets = Array.from(c.adsets.values()).map((s) => {
       const ads = s.ads.map((a) => ({
@@ -189,7 +193,19 @@ export function mockCampaigns() {
       return { adset_id: s.adset_id, adset_name: s.adset_name, agg, ads };
     });
     const agg = sum(adsets.map((x) => x.agg));
-    return { campaign_id: c.campaign_id, campaign_name: c.campaign_name, agg, adsets };
+    const dailyBudget = BUDGET_VALUES[bIdx++ % BUDGET_VALUES.length];
+    MOCK_BUDGETS[c.campaign_id] = dailyBudget;
+    return {
+      campaign_id: c.campaign_id,
+      campaign_name: c.campaign_name,
+      agg,
+      adsets,
+      daily_budget: dailyBudget as number | null,
+      lifetime_budget: null as number | null,
+      budget_remaining: null as number | null,
+      configured_status: "ACTIVE" as string | null,
+      budget_type: "CBO" as "CBO" | "ABO",
+    };
   });
 
   return { period: { since: "", until: "", days: 30 }, campaigns };

@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabase";
-import { fetchAdInsights, extractActions, MetaApiError } from "@/lib/meta";
+import { fetchAdInsights, extractActions, fetchCampaignBudgets, MetaApiError } from "@/lib/meta";
 import { brDateStr } from "@/lib/dateRange";
 
 /**
@@ -95,6 +95,30 @@ export async function POST(req: Request) {
 
       totalRecords += records.length;
       results.push({ account: acc.name, records: records.length });
+
+      // Sync de budgets das campanhas
+      try {
+        const budgets = await fetchCampaignBudgets({
+          token: conn.access_token,
+          adAccountId: acc.ad_account_id,
+        });
+        if (budgets.length > 0) {
+          const budgetRows = budgets.map((b) => ({
+            campaign_id: b.id,
+            ad_account_id: acc.ad_account_id,
+            daily_budget: b.daily_budget ? Number(b.daily_budget) / 100 : null,
+            lifetime_budget: b.lifetime_budget ? Number(b.lifetime_budget) / 100 : null,
+            budget_remaining: b.budget_remaining ? Number(b.budget_remaining) / 100 : null,
+            configured_status: b.configured_status ?? null,
+            budget_type: b.daily_budget || b.lifetime_budget ? "CBO" : "ABO",
+          }));
+          await sb
+            .from("fb_campaign_budgets")
+            .upsert(budgetRows, { onConflict: "campaign_id" });
+        }
+      } catch {
+        // Budget sync is best-effort — don't fail the whole sync
+      }
     } catch (e) {
       const msg = e instanceof MetaApiError ? e.message : (e as Error).message;
       results.push({ account: acc.name, records: 0, error: msg });
