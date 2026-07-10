@@ -19,7 +19,7 @@ export function SyncButtonTopBar({ className = "" }: { className?: string }) {
         fetch("/api/hotmart/sync", {
           method: "POST",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({ days: 1 }),
+          body: JSON.stringify({ days: 14 }),
         }),
       ]);
 
