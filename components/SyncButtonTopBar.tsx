@@ -10,12 +10,20 @@ export function SyncButtonTopBar({ className = "" }: { className?: string }) {
   async function handleSync() {
     setState("syncing");
     try {
-      const r = await fetch("/api/facebook/sync", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ days: 1 }),
-      });
-      if (!r.ok) {
+      const [fb, hm] = await Promise.all([
+        fetch("/api/facebook/sync", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ days: 1 }),
+        }),
+        fetch("/api/hotmart/sync", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ days: 1 }),
+        }),
+      ]);
+
+      if (!fb.ok || !hm.ok) {
         setState("error");
         setTimeout(() => setState("idle"), 3000);
       } else {
