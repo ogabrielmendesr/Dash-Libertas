@@ -13,7 +13,7 @@ export function Sparkline({ data, stroke = "#ff3da3", fill = "rgba(255,61,163,0.
   const min = Math.min(...data);
   const max = Math.max(...data);
   const range = max - min || 1;
-  const x = (i: number) => (i / (data.length - 1)) * W;
+  const x = (i: number) => (i / Math.max(1, data.length - 1)) * W;
   const y = (v: number) => H - ((v - min) / range) * (H - 4) - 2;
   const line = data.map((v, i) => `${i === 0 ? "M" : "L"} ${x(i).toFixed(1)} ${y(v).toFixed(1)}`).join(" ");
   const area = `M 0 ${H} L ${data.map((v, i) => `${x(i).toFixed(1)} ${y(v).toFixed(1)}`).join(" L ")} L ${W} ${H} Z`;
