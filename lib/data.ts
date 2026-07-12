@@ -26,6 +26,28 @@ function computeDays(since: string, until: string): number {
 // ============================================================
 // Helpers
 // ============================================================
+
+/**
+ * ⚠ O Supabase (PostgREST) devolve no máximo 1000 linhas por resposta e
+ * TRUNCA silenciosamente o excedente. Períodos com 1000+ vendas (ou 1000+
+ * linhas de insight ad×dia) subnotificavam receita/investimento nos KPIs.
+ * Este helper pagina via .range() até trazer tudo.
+ */
+async function fetchAllRows<T>(
+  buildQuery: (from: number, to: number) => PromiseLike<{ data: T[] | null; error: { message: string } | null }>
+): Promise<T[]> {
+  const pageSize = 1000;
+  const all: T[] = [];
+  for (let from = 0; ; from += pageSize) {
+    const { data, error } = await buildQuery(from, from + pageSize - 1);
+    if (error) throw new Error(error.message);
+    const rows = data ?? [];
+    all.push(...rows);
+    if (rows.length < pageSize) break;
+  }
+  return all;
+}
+
 async function getSettings(): Promise<{ display_currency: Currency; fx_usd_brl: number }> {
   if (useMockData()) return { display_currency: "BRL", fx_usd_brl: 5.20 };
   const sb = supabaseAdmin();
@@ -161,24 +183,30 @@ export async function fetchDashboard(
   );
 
   // 2) Insights do Meta no período, apenas das contas habilitadas
-  const { data: insightRows } = enabledIds.length === 0 ? { data: [] } :
-    await sb
-      .from("fb_ad_insights")
-      .select(`
-        ad_id, ad_name, adset_id, adset_name, campaign_id, campaign_name,
-        ad_account_id, date, spend, impressions, link_clicks,
-        landing_page_views, initiate_checkouts
-      `)
-      .in("ad_account_id", enabledIds)
-      .gte("date", sinceStr)
-      .lte("date", untilStr);
+  const insightRows = enabledIds.length === 0 ? [] :
+    await fetchAllRows((from, to) =>
+      sb
+        .from("fb_ad_insights")
+        .select(`
+          ad_id, ad_name, adset_id, adset_name, campaign_id, campaign_name,
+          ad_account_id, date, spend, impressions, link_clicks,
+          landing_page_views, initiate_checkouts
+        `)
+        .in("ad_account_id", enabledIds)
+        .gte("date", sinceStr)
+        .lte("date", untilStr)
+        .range(from, to)
+    );
 
   // 2) Vendas no período (TODAS, cruzaremos depois)
-  const { data: salesRange } = await sb
-    .from("sales")
-    .select("utm_content, sale_amount, currency, producer_amount_usd, producer_amount_brl, status, sale_date, buyer_email, payment_method")
-    .gte("sale_date", `${sinceStr}T00:00:00-03:00`)
-    .lte("sale_date", `${untilStr}T23:59:59.999-03:00`);
+  const salesRange = await fetchAllRows((from, to) =>
+    sb
+      .from("sales")
+      .select("utm_content, sale_amount, currency, producer_amount_usd, producer_amount_brl, status, sale_date, buyer_email, payment_method")
+      .gte("sale_date", `${sinceStr}T00:00:00-03:00`)
+      .lte("sale_date", `${untilStr}T23:59:59.999-03:00`)
+      .range(from, to)
+  );
 
   // 3) Agrega vendas APROVADAS por ad_id (utm_content), convertendo cada uma pra display
   const salesByAd = new Map<string, { count: number; revenue: number }>();
@@ -508,24 +536,30 @@ export async function fetchCampaigns(
     (enabledAccs ?? []).map((a) => [a.ad_account_id, a.currency])
   );
 
-  const { data: insightRows } = enabledIds2.length === 0 ? { data: [] } :
-    await sb
-      .from("fb_ad_insights")
-      .select(`
-        ad_id, ad_name, adset_id, adset_name, campaign_id, campaign_name,
-        ad_account_id, date, spend, impressions, link_clicks,
-        landing_page_views, initiate_checkouts
-      `)
-      .in("ad_account_id", enabledIds2)
-      .gte("date", sinceStr)
-      .lte("date", untilStr);
+  const insightRows = enabledIds2.length === 0 ? [] :
+    await fetchAllRows((from, to) =>
+      sb
+        .from("fb_ad_insights")
+        .select(`
+          ad_id, ad_name, adset_id, adset_name, campaign_id, campaign_name,
+          ad_account_id, date, spend, impressions, link_clicks,
+          landing_page_views, initiate_checkouts
+        `)
+        .in("ad_account_id", enabledIds2)
+        .gte("date", sinceStr)
+        .lte("date", untilStr)
+        .range(from, to)
+    );
 
   // Vendas no período
-  const { data: salesRange } = await sb
-    .from("sales")
-    .select("utm_content, sale_amount, currency, producer_amount_usd, producer_amount_brl, status")
-    .gte("sale_date", `${sinceStr}T00:00:00-03:00`)
-    .lte("sale_date", `${untilStr}T23:59:59.999-03:00`);
+  const salesRange = await fetchAllRows((from, to) =>
+    sb
+      .from("sales")
+      .select("utm_content, sale_amount, currency, producer_amount_usd, producer_amount_brl, status")
+      .gte("sale_date", `${sinceStr}T00:00:00-03:00`)
+      .lte("sale_date", `${untilStr}T23:59:59.999-03:00`)
+      .range(from, to)
+  );
 
   const salesByAd = new Map<string, { count: number; revenue: number }>();
   for (const s of salesRange ?? []) {
@@ -695,27 +729,41 @@ export async function fetchSales(
   const { display_currency: display, fx_usd_brl: fx } = await getSettings();
   const fxTable = await getFxTable();
   const sb = supabaseAdmin();
-  let q = sb
-    .from("sales")
-    .select("id, transaction_id, status, product_name, sale_amount, currency, producer_amount_usd, producer_amount_brl, utm_content, sale_date, buyer_email, payment_method, placement, traffic_source")
-    .order("sale_date", { ascending: false })
-    .limit(200);
+  const SALES_COLS =
+    "id, transaction_id, status, product_name, sale_amount, currency, producer_amount_usd, producer_amount_brl, utm_content, sale_date, buyer_email, payment_method, placement, traffic_source";
 
-  if (range) {
-    // sale_date é timestamptz — filtra do início do "since" até o fim do "until"
-    q = q.gte("sale_date", `${range.since}T00:00:00-03:00`).lte("sale_date", `${range.until}T23:59:59.999-03:00`);
-  }
-
-  const { data: sales } = await q;
+  // Com período: TODAS as vendas do range (paginado), pra receita/breakdowns corretos.
+  // Sem período: só o feed das 200 mais recentes.
+  const sales = range
+    ? await fetchAllRows((from, to) =>
+        sb
+          .from("sales")
+          .select(SALES_COLS)
+          .order("sale_date", { ascending: false })
+          // sale_date é timestamptz — filtra do início do "since" até o fim do "until"
+          .gte("sale_date", `${range.since}T00:00:00-03:00`)
+          .lte("sale_date", `${range.until}T23:59:59.999-03:00`)
+          .range(from, to)
+      )
+    : (
+        await sb
+          .from("sales")
+          .select(SALES_COLS)
+          .order("sale_date", { ascending: false })
+          .limit(200)
+      ).data;
 
   const utmIds = Array.from(new Set((sales ?? []).map((s) => s.utm_content).filter(Boolean) as string[]));
   const adMap: Map<string, { ad_name: string; campaign_name: string }> = new Map();
   if (utmIds.length > 0) {
-    const { data: ads } = await sb
-      .from("fb_ad_insights")
-      .select("ad_id, ad_name, campaign_name")
-      .in("ad_id", utmIds);
-    for (const a of ads ?? []) adMap.set(a.ad_id, { ad_name: a.ad_name, campaign_name: a.campaign_name });
+    const ads = await fetchAllRows((from, to) =>
+      sb
+        .from("fb_ad_insights")
+        .select("ad_id, ad_name, campaign_name")
+        .in("ad_id", utmIds)
+        .range(from, to)
+    );
+    for (const a of ads) adMap.set(a.ad_id, { ad_name: a.ad_name, campaign_name: a.campaign_name });
   }
 
   const enriched = (sales ?? []).map((s) => {
@@ -830,13 +878,16 @@ export async function fetchCountrySales(
   const fxTable = await getFxTable();
   const sb = supabaseAdmin();
 
-  const { data } = await sb
-    .from("sales")
-    .select("buyer_country, sale_amount, currency, producer_amount_brl, producer_amount_usd, status")
-    .eq("status", "approved")
-    .gte("sale_date", `${range.since}T00:00:00-03:00`)
-    .lte("sale_date", `${range.until}T23:59:59.999-03:00`)
-    .not("buyer_country", "is", null);
+  const data = await fetchAllRows((from, to) =>
+    sb
+      .from("sales")
+      .select("buyer_country, sale_amount, currency, producer_amount_brl, producer_amount_usd, status")
+      .eq("status", "approved")
+      .gte("sale_date", `${range.since}T00:00:00-03:00`)
+      .lte("sale_date", `${range.until}T23:59:59.999-03:00`)
+      .not("buyer_country", "is", null)
+      .range(from, to)
+  );
 
   const byCountry = new Map<string, { sales: number; revenue: number }>();
   for (const s of data ?? []) {
