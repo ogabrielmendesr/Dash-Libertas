@@ -74,7 +74,7 @@ async function fetchAllPages<T>(path: string, params: DateRange, token: string):
 
     if (!res.ok) {
       const err = await res.text();
-      throw new Error(`Hotmart API ${res.status}: ${err}`);
+      throw new Error(`Hotmart API ${res.status} em ${url.pathname}${url.search}: ${err}`);
     }
 
     const data = await res.json();
