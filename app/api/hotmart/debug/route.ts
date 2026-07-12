@@ -1,7 +1,8 @@
 import { NextResponse } from "next/server";
 
 // Rota temporária de diagnóstico — remover após investigar o 400 em produção.
-export async function GET() {
+export async function GET(req: Request) {
+  const externalToken = new URL(req.url).searchParams.get("token");
   const basic = process.env.HOTMART_BASIC ?? "";
   const info: Record<string, unknown> = {
     basic_len: basic.length,
@@ -25,13 +26,15 @@ export async function GET() {
     info.token_type = tokenBody?.token_type ?? null;
     info.scope = tokenBody?.scope ?? null;
 
-    if (tokenBody?.access_token) {
+    const useToken = externalToken || tokenBody?.access_token;
+    info.used_external_token = !!externalToken;
+    if (useToken) {
       const end = Date.now();
       const start = end - 24 * 3600 * 1000;
       const histRes = await fetch(
         `https://developers.hotmart.com/payments/api/v1/sales/history?start_date=${start}&end_date=${end}&max_results=10`,
         {
-          headers: { Authorization: `Bearer ${tokenBody.access_token}` },
+          headers: { Authorization: `Bearer ${useToken}` },
           cache: "no-store",
         }
       );
