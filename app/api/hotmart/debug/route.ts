@@ -11,6 +11,18 @@ export async function GET(req: Request) {
   };
 
   try {
+    if (externalToken) {
+      // Pula a emissão de token próprio para não invalidar o token externo
+      info.token_status = "pulado (token externo)";
+      const end = Date.now();
+      const start = end - 24 * 3600 * 1000;
+      const r = await fetch(
+        `https://developers.hotmart.com/payments/api/v1/sales/history?start_date=${start}&end_date=${end}&max_results=10`,
+        { headers: { Authorization: `Bearer ${externalToken}` }, cache: "no-store" }
+      );
+      const body = await r.text();
+      return NextResponse.json({ ...info, used_external_token: true, history: `${r.status} ${body.slice(0, 120)}` });
+    }
     const tokenRes = await fetch(
       "https://api-sec-vlc.hotmart.com/security/oauth/token?grant_type=client_credentials",
       {
