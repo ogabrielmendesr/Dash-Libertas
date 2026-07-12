@@ -28,7 +28,8 @@ function mapRow(item: HotmartSaleItem, producer: HotmartProducerCommission | und
   const utmContent =
     extractAdIdFromSrc(src) ?? extractAdIdFromSrc(p.tracking?.external_code) ?? null;
 
-  const dateMs = p.approved_date ?? p.order_date ?? Date.now();
+  // Mesma regra do webhook (extractSaleRow): data da compra, não da aprovação
+  const dateMs = p.order_date ?? p.approved_date ?? Date.now();
 
   return {
     transaction_id: p.transaction!,
