@@ -31,16 +31,21 @@ export async function GET(req: Request) {
     if (useToken) {
       const end = Date.now();
       const start = end - 24 * 3600 * 1000;
-      const histRes = await fetch(
-        `https://developers.hotmart.com/payments/api/v1/sales/history?start_date=${start}&end_date=${end}&max_results=10`,
-        {
-          headers: { Authorization: `Bearer ${useToken}` },
+      const base = `https://developers.hotmart.com/payments/api/v1/sales/history?start_date=${start}&end_date=${end}`;
+      const variants: Array<[string, string, Record<string, string>]> = [
+        ["padrao", `${base}&max_results=10`, {}],
+        ["com_user_agent", `${base}&max_results=10`, { "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)" }],
+        ["com_accept", `${base}&max_results=10`, { Accept: "application/json" }],
+        ["sem_max_results", base, {}],
+      ];
+      for (const [name, url, extra] of variants) {
+        const r = await fetch(url, {
+          headers: { Authorization: `Bearer ${useToken}`, ...extra },
           cache: "no-store",
-        }
-      );
-      info.history_status = histRes.status;
-      const histBody = await histRes.text();
-      info.history_body_head = histBody.slice(0, 300);
+        });
+        const body = await r.text();
+        info[`v_${name}`] = `${r.status} ${body.slice(0, 80)}`;
+      }
     }
   } catch (e) {
     info.exception = (e as Error).message;
