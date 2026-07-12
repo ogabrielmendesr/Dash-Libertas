@@ -1,20 +1,6 @@
-const API_BASE = "https://developers.hotmart.com/payments/api/v1";
-const TOKEN_URL =
-  "https://api-sec-vlc.hotmart.com/security/oauth/token?grant_type=client_credentials";
-
-async function getToken(): Promise<string> {
-  const basic = process.env.HOTMART_BASIC;
-  if (!basic) throw new Error("HOTMART_BASIC não configurado");
-
-  const res = await fetch(TOKEN_URL, {
-    method: "POST",
-    headers: { Authorization: basic, "Content-Type": "application/json" },
-    cache: "no-store",
-  });
-  if (!res.ok) throw new Error(`Hotmart auth falhou: ${res.status} ${await res.text()}`);
-  const data = await res.json();
-  return data.access_token as string;
-}
+// Acesso à API de pagamentos da Hotmart via edge function `hotmart-proxy`
+// no Supabase (sa-east-1). Chamada direta não funciona em produção: a Hotmart
+// vincula o token à origem e recusa requisições vindas da Vercel.
 
 // ⚠ Diferente do webhook: no GET /sales/history os campos da venda vêm
 // aninhados em `purchase`, o tracking só traz source/source_sck/external_code
@@ -55,53 +41,48 @@ function rangeToEpochMs(params: DateRange) {
   };
 }
 
-async function fetchAllPages<T>(path: string, params: DateRange, token: string): Promise<T[]> {
+async function fetchViaProxy<T>(path: string, params: DateRange): Promise<T[]> {
+  const basic = process.env.HOTMART_BASIC;
+  if (!basic) throw new Error("HOTMART_BASIC não configurado");
+
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  if (!supabaseUrl || !serviceKey) throw new Error("Supabase não configurado");
+
   const { startDate, endDate } = rangeToEpochMs(params);
-  const allItems: T[] = [];
-  let pageToken: string | undefined;
 
-  do {
-    const url = new URL(`${API_BASE}${path}`);
-    url.searchParams.set("start_date", String(startDate));
-    url.searchParams.set("end_date", String(endDate));
-    url.searchParams.set("max_results", "500");
-    if (pageToken) url.searchParams.set("page_token", pageToken);
+  const res = await fetch(`${supabaseUrl}/functions/v1/hotmart-proxy`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${serviceKey}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ basic, path, start_date: startDate, end_date: endDate }),
+    cache: "no-store",
+  });
 
-    const res = await fetch(url.toString(), {
-      headers: { Authorization: `Bearer ${token}` },
-      cache: "no-store",
-    });
-
-    if (!res.ok) {
-      const err = await res.text();
-      throw new Error(`Hotmart API ${res.status} em ${url.pathname}${url.search}: ${err}`);
-    }
-
-    const data = await res.json();
-    allItems.push(...(data.items ?? []));
-    pageToken = data.page_info?.next_page_token ?? undefined;
-  } while (pageToken);
-
-  return allItems;
+  const data = await res.json().catch(() => null);
+  if (!res.ok || data?.error) {
+    throw new Error(data?.error ?? `hotmart-proxy falhou: ${res.status}`);
+  }
+  return (data.items ?? []) as T[];
 }
 
 export async function fetchHotmartSales(params: DateRange): Promise<HotmartSaleItem[]> {
-  const token = await getToken();
-  return fetchAllPages<HotmartSaleItem>("/sales/history", params, token);
+  return fetchViaProxy<HotmartSaleItem>("/sales/history", params);
 }
 
 /** Comissão do produtor por transação (GET /sales/commissions). */
 export async function fetchHotmartCommissions(
   params: DateRange
 ): Promise<Map<string, HotmartProducerCommission>> {
-  const token = await getToken();
-  const items = await fetchAllPages<{
+  const items = await fetchViaProxy<{
     transaction?: string | null;
     commissions?: Array<{
       source?: string | null;
       commission?: { value?: number | string | null; currency_code?: string | null } | null;
     }> | null;
-  }>("/sales/commissions", params, token);
+  }>("/sales/commissions", params);
 
   const byTransaction = new Map<string, HotmartProducerCommission>();
   for (const item of items) {

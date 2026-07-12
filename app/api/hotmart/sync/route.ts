@@ -14,6 +14,9 @@ import {
 } from "@/lib/hotmart";
 import { brDateStr } from "@/lib/dateRange";
 
+// Sync de 14+ dias pagina a API da Hotmart via proxy — precisa de mais que os 10s padrão
+export const maxDuration = 60;
+
 function toNum(v: number | string | null | undefined): number | null {
   if (v == null) return null;
   const n = Number(v);
