@@ -16,56 +16,52 @@ async function getToken(): Promise<string> {
   return data.access_token as string;
 }
 
+// ⚠ Diferente do webhook: no GET /sales/history os campos da venda vêm
+// aninhados em `purchase`, o tracking só traz source/source_sck/external_code
+// (sem utm_*), e não há commissions nem buyer.address.
 export type HotmartSaleItem = {
-  transaction: string;
-  status: string;
-  product?: { id?: number | string; name?: string };
-  buyer?: {
-    email?: string | null;
-    name?: string | null;
-    address?: { country_iso?: string | null } | null;
-  } | null;
-  purchase_date?: number | null;
-  approved_date?: number | null;
-  price?: { value?: number | string | null; currency_value?: string | null } | null;
-  commission?: { value?: number | string | null; currency_value?: string | null } | null;
-  commissions?: Array<{
-    source?: string | null;
-    value?: number | string | null;
-    currency_value?: string | null;
-    currency_conversion?: {
-      converted_value?: number | string | null;
-      converted_to_currency?: string | null;
-      conversion_rate?: number | string | null;
+  buyer?: { name?: string | null; email?: string | null } | null;
+  product?: { id?: number | string | null; name?: string | null } | null;
+  purchase?: {
+    transaction?: string | null;
+    status?: string | null;
+    order_date?: number | null;
+    approved_date?: number | null;
+    price?: { value?: number | string | null; currency_code?: string | null } | null;
+    payment?: { type?: string | null; method?: string | null } | null;
+    tracking?: {
+      source?: string | null;
+      source_sck?: string | null;
+      external_code?: string | null;
     } | null;
-  }> | null;
-  tracking?: {
-    utm_source?: string | null;
-    utm_medium?: string | null;
-    utm_campaign?: string | null;
-    utm_term?: string | null;
-    utm_content?: string | null;
-    source_sck?: string | null;
   } | null;
-  origin?: { sck?: string | null; src?: string | null; xcod?: string | null } | null;
-  payment?: { type?: string | null } | null;
 };
 
-export async function fetchHotmartSales(params: {
+export type HotmartProducerCommission = {
+  value: number | null;
+  currencyCode: string | null;
+};
+
+type DateRange = {
   since: string; // YYYY-MM-DD
   until: string; // YYYY-MM-DD
-}): Promise<HotmartSaleItem[]> {
-  const token = await getToken();
+};
 
+function rangeToEpochMs(params: DateRange) {
   // Converte datas para epoch ms no fuso BRT (UTC-3)
-  const startDate = new Date(`${params.since}T00:00:00-03:00`).getTime();
-  const endDate = new Date(`${params.until}T23:59:59-03:00`).getTime();
+  return {
+    startDate: new Date(`${params.since}T00:00:00-03:00`).getTime(),
+    endDate: new Date(`${params.until}T23:59:59-03:00`).getTime(),
+  };
+}
 
-  const allItems: HotmartSaleItem[] = [];
+async function fetchAllPages<T>(path: string, params: DateRange, token: string): Promise<T[]> {
+  const { startDate, endDate } = rangeToEpochMs(params);
+  const allItems: T[] = [];
   let pageToken: string | undefined;
 
   do {
-    const url = new URL(`${API_BASE}/sales/history`);
+    const url = new URL(`${API_BASE}${path}`);
     url.searchParams.set("start_date", String(startDate));
     url.searchParams.set("end_date", String(endDate));
     url.searchParams.set("max_results", "500");
@@ -87,4 +83,36 @@ export async function fetchHotmartSales(params: {
   } while (pageToken);
 
   return allItems;
+}
+
+export async function fetchHotmartSales(params: DateRange): Promise<HotmartSaleItem[]> {
+  const token = await getToken();
+  return fetchAllPages<HotmartSaleItem>("/sales/history", params, token);
+}
+
+/** Comissão do produtor por transação (GET /sales/commissions). */
+export async function fetchHotmartCommissions(
+  params: DateRange
+): Promise<Map<string, HotmartProducerCommission>> {
+  const token = await getToken();
+  const items = await fetchAllPages<{
+    transaction?: string | null;
+    commissions?: Array<{
+      source?: string | null;
+      commission?: { value?: number | string | null; currency_code?: string | null } | null;
+    }> | null;
+  }>("/sales/commissions", params, token);
+
+  const byTransaction = new Map<string, HotmartProducerCommission>();
+  for (const item of items) {
+    if (!item.transaction) continue;
+    const producer = (item.commissions ?? []).find((c) => c?.source === "PRODUCER");
+    if (!producer?.commission) continue;
+    const value = Number(producer.commission.value);
+    byTransaction.set(item.transaction, {
+      value: Number.isFinite(value) ? value : null,
+      currencyCode: producer.commission.currency_code ?? null,
+    });
+  }
+  return byTransaction;
 }

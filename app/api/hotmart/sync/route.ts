@@ -1,6 +1,11 @@
 import { NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabase";
-import { fetchHotmartSales, HotmartSaleItem } from "@/lib/hotmart-api";
+import {
+  fetchHotmartSales,
+  fetchHotmartCommissions,
+  HotmartSaleItem,
+  HotmartProducerCommission,
+} from "@/lib/hotmart-api";
 import {
   normalizeHotmartStatus,
   extractAdIdFromSrc,
@@ -15,48 +20,39 @@ function toNum(v: number | string | null | undefined): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
-function mapRow(item: HotmartSaleItem) {
-  const producer = (item.commissions ?? []).find((c) => c?.source === "PRODUCER");
-
-  const producerAmountUsd = toNum(producer?.value);
-  const producerAmountBrl =
-    producer?.currency_conversion?.converted_to_currency === "BRL"
-      ? toNum(producer.currency_conversion.converted_value)
-      : null;
-  const producerFxRate = toNum(producer?.currency_conversion?.conversion_rate);
-
-  const src = item.origin?.src ?? null;
+function mapRow(item: HotmartSaleItem, producer: HotmartProducerCommission | undefined) {
+  const p = item.purchase!;
+  // O history não traz utm_content; o ad_id vem embutido em tracking.source
+  // (formato Hotmart Click Ads) ou external_code — mesmo parser do webhook.
+  const src = p.tracking?.source ?? null;
   const utmContent =
-    item.tracking?.utm_content ||
-    extractAdIdFromSrc(src) ||
-    extractAdIdFromSrc(item.origin?.xcod) ||
-    null;
+    extractAdIdFromSrc(src) ?? extractAdIdFromSrc(p.tracking?.external_code) ?? null;
 
-  const dateMs = item.approved_date ?? item.purchase_date ?? Date.now();
+  const dateMs = p.approved_date ?? p.order_date ?? Date.now();
 
   return {
-    transaction_id: item.transaction,
-    status: normalizeHotmartStatus(item.status ?? ""),
+    transaction_id: p.transaction!,
+    status: normalizeHotmartStatus(p.status ?? ""),
     product_id: item.product?.id != null ? String(item.product.id) : null,
     product_name: item.product?.name ?? "Produto",
-    sale_amount: toNum(item.price?.value) ?? 0,
-    commission_amount: toNum(item.commission?.value),
-    producer_amount_usd: producerAmountUsd,
-    producer_amount_brl: producerAmountBrl,
-    producer_fx_rate: producerFxRate,
-    payment_method: item.payment?.type ?? null,
+    sale_amount: toNum(p.price?.value) ?? 0,
+    commission_amount: null,
+    producer_amount_usd: producer?.currencyCode === "USD" ? producer.value : null,
+    producer_amount_brl: producer?.currencyCode === "BRL" ? producer.value : null,
+    producer_fx_rate: null,
+    payment_method: p.payment?.type ?? null,
     placement: extractPlacement(src),
     traffic_source: classifyTrafficSource(src),
-    currency: item.price?.currency_value ?? "BRL",
+    currency: p.price?.currency_code ?? "BRL",
     utm_content: utmContent,
-    utm_source: item.tracking?.utm_source ?? (src ? "facebook" : null),
-    utm_medium: item.tracking?.utm_medium ?? null,
-    utm_campaign: item.tracking?.utm_campaign ?? null,
-    utm_term: item.tracking?.utm_term ?? null,
-    sck: item.tracking?.source_sck ?? item.origin?.sck ?? null,
+    utm_source: src ? "facebook" : null,
+    utm_medium: null,
+    utm_campaign: null,
+    utm_term: null,
+    sck: p.tracking?.source_sck ?? null,
     buyer_email: item.buyer?.email ?? null,
     buyer_name: item.buyer?.name ?? null,
-    buyer_country: item.buyer?.address?.country_iso ?? null,
+    buyer_country: null,
     sale_date: new Date(dateMs).toISOString(),
   };
 }
@@ -75,30 +71,70 @@ export async function POST(req: Request) {
   try {
     const items = await fetchHotmartSales({ since: sinceStr, until: untilStr });
 
-    let totalUpserted = 0;
-    if (items.length > 0) {
-      const rows = items.map(mapRow);
-      const batchSize = 200;
-      for (let i = 0; i < rows.length; i += batchSize) {
+    // Dedup por transação (o history pode repetir itens entre páginas)
+    const byTransaction = new Map<string, HotmartSaleItem>();
+    for (const item of items) {
+      const tx = item.purchase?.transaction;
+      if (tx) byTransaction.set(tx, item);
+    }
+    const transactions = Array.from(byTransaction.keys());
+
+    // Insere apenas o que está na Hotmart e NÃO está no banco — as linhas
+    // existentes vêm do webhook com dados mais ricos (país, comissão BRL)
+    // e não devem ser sobrescritas.
+    const existing = new Set<string>();
+    const chunkSize = 200;
+    for (let i = 0; i < transactions.length; i += chunkSize) {
+      const { data, error } = await sb
+        .from("sales")
+        .select("transaction_id")
+        .in("transaction_id", transactions.slice(i, i + chunkSize));
+      if (error) throw new Error(error.message);
+      for (const row of data ?? []) existing.add(row.transaction_id);
+    }
+
+    const missing = transactions.filter((tx) => !existing.has(tx));
+
+    let totalInserted = 0;
+    if (missing.length > 0) {
+      const producerByTx = await fetchHotmartCommissions({ since: sinceStr, until: untilStr });
+      const rows = missing.map((tx) => mapRow(byTransaction.get(tx)!, producerByTx.get(tx)));
+      for (let i = 0; i < rows.length; i += chunkSize) {
         const { error } = await sb
           .from("sales")
-          .upsert(rows.slice(i, i + batchSize), { onConflict: "transaction_id" });
+          .upsert(rows.slice(i, i + chunkSize), {
+            onConflict: "transaction_id",
+            ignoreDuplicates: true,
+          });
         if (error) throw new Error(error.message);
-        totalUpserted += rows.slice(i, i + batchSize).length;
       }
+      totalInserted = rows.length;
     }
 
     await sb.from("sync_logs").insert({
       type: "hotmart_sync",
       status: "success",
-      records_processed: totalUpserted,
-      message: `${totalUpserted} vendas sincronizadas · ${days} dia(s)`,
-      metadata: { since: sinceStr, until: untilStr, fetched: items.length },
+      records_processed: totalInserted,
+      message: `${totalInserted} venda(s) preenchida(s) · ${byTransaction.size} na Hotmart · ${days} dia(s)`,
+      metadata: {
+        since: sinceStr,
+        until: untilStr,
+        fetched: byTransaction.size,
+        already_in_db: existing.size,
+        inserted: totalInserted,
+      },
       started_at: startedAt,
       finished_at: new Date().toISOString(),
     });
 
-    return NextResponse.json({ ok: true, records: totalUpserted, since: sinceStr, until: untilStr });
+    return NextResponse.json({
+      ok: true,
+      records: totalInserted,
+      fetched: byTransaction.size,
+      alreadyInDb: existing.size,
+      since: sinceStr,
+      until: untilStr,
+    });
   } catch (e) {
     const msg = (e as Error).message;
     await sb.from("sync_logs").insert({
