@@ -11,6 +11,7 @@ import {
   extractAdIdFromSrc,
   extractPlacement,
   classifyTrafficSource,
+  resolveOriginSrc,
 } from "@/lib/hotmart";
 import { brDateStr } from "@/lib/dateRange";
 
@@ -27,7 +28,7 @@ function mapRow(item: HotmartSaleItem, producer: HotmartProducerCommission | und
   const p = item.purchase!;
   // O history não traz utm_content; o ad_id vem embutido em tracking.source
   // (formato Hotmart Click Ads) ou external_code — mesmo parser do webhook.
-  const src = p.tracking?.source ?? null;
+  const src = resolveOriginSrc(p.tracking?.source, p.tracking?.external_code);
   const utmContent =
     extractAdIdFromSrc(src) ?? extractAdIdFromSrc(p.tracking?.external_code) ?? null;
 

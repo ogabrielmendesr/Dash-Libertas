@@ -115,6 +115,26 @@ export function extractAdIdFromSrc(src: string | null | undefined): string | nul
 }
 
 /**
+ * Separador que a Hotmart usa no lugar de "|" quando o tracking chega em
+ * `xcod` em vez de `src` (observado desde set/2026).
+ * Ex: "FBhQwK21wXxR[Camp]|123hQwK21wXxRCONJUNTO|456hQwK21wXxRVídeo|789hQwK21wXxRInstagram_Stories"
+ */
+const XCOD_SEPARATOR = /hQwK21wXxR/g;
+
+/**
+ * Devolve a string de origem do tráfego no formato "FB|...|placement".
+ * Usa `src` se vier; senão usa `xcod`, trocando o separador da Hotmart por "|".
+ */
+export function resolveOriginSrc(
+  src: string | null | undefined,
+  xcod: string | null | undefined
+): string | null {
+  if (src) return src;
+  if (!xcod) return null;
+  return xcod.replace(XCOD_SEPARATOR, "|");
+}
+
+/**
  * Extrai o placement (último segmento de origin.src).
  * Ex: "FB|...|Facebook_Mobile_Reels" → "Facebook_Mobile_Reels"
  */
@@ -216,8 +236,9 @@ export function extractSaleRow(payload: HotmartWebhook) {
   //   2) purchase.origin.src/xcod (Hotmart Click Ads — formato proprietário)
   // Usamos utm_content se vier, senão extraímos do origin.src/xcod.
   const utmContentFromTracking = tracking?.utm_content ?? null;
+  const originSrc = resolveOriginSrc(origin?.src, origin?.xcod);
   const utmContentFromOrigin =
-    extractAdIdFromSrc(origin?.src) ?? extractAdIdFromSrc(origin?.xcod);
+    extractAdIdFromSrc(originSrc) ?? extractAdIdFromSrc(origin?.xcod);
   const utmContent = utmContentFromTracking || utmContentFromOrigin;
 
   return {
@@ -233,11 +254,11 @@ export function extractSaleRow(payload: HotmartWebhook) {
     producer_amount_brl: Number.isFinite(producerAmountBrl as number) ? producerAmountBrl : null,
     producer_fx_rate: Number.isFinite(producerFxRate as number) ? producerFxRate : null,
     payment_method: (purchase.payment?.type as string) ?? null,
-    placement: extractPlacement(origin?.src),
-    traffic_source: classifyTrafficSource(origin?.src),
+    placement: extractPlacement(originSrc),
+    traffic_source: classifyTrafficSource(originSrc),
     currency: purchase.price?.currency_value ?? "BRL",
     utm_content: utmContent,
-    utm_source: tracking?.utm_source ?? (origin?.src ? "facebook" : null),
+    utm_source: tracking?.utm_source ?? (originSrc ? "facebook" : null),
     utm_medium: tracking?.utm_medium ?? null,
     utm_campaign: tracking?.utm_campaign ?? null,
     utm_term: tracking?.utm_term ?? null,
