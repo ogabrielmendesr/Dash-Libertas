@@ -168,6 +168,11 @@ export function mockCampaigns() {
     link_clicks: a.linkClicks,
     landing_page_views: a.pageViews,
     initiate_checkouts: a.initiateCheckouts,
+    // Demo: Meta costuma contar ~10% a mais que a Hotmart (view-through)
+    meta_purchases: Math.round(a.sales * 1.1),
+    meta_purchase_value: a.revenue * 1.15,
+    spend_acc: a.spend,
+    meta_purchase_value_acc: a.revenue * 1.15,
     sales: a.sales,
     revenue: a.revenue,
   });
@@ -190,7 +195,15 @@ export function mockCampaigns() {
         agg: addAd(a),
       }));
       const agg = sum(ads.map((x) => x.agg));
-      return { adset_id: s.adset_id, adset_name: s.adset_name, agg, ads };
+      return {
+        adset_id: s.adset_id,
+        adset_name: s.adset_name,
+        agg,
+        daily_budget: null as number | null,
+        lifetime_budget: null as number | null,
+        status: "ACTIVE" as string | null,
+        ads,
+      };
     });
     const agg = sum(adsets.map((x) => x.agg));
     const dailyBudget = BUDGET_VALUES[bIdx++ % BUDGET_VALUES.length];
@@ -198,17 +211,24 @@ export function mockCampaigns() {
     return {
       campaign_id: c.campaign_id,
       campaign_name: c.campaign_name,
+      account_currency: "BRL" as const,
       agg,
       adsets,
       daily_budget: dailyBudget as number | null,
       lifetime_budget: null as number | null,
       budget_remaining: null as number | null,
       configured_status: "ACTIVE" as string | null,
+      status: "ACTIVE" as string | null,
       budget_type: "CBO" as "CBO" | "ABO",
     };
   });
 
-  return { period: { since: "", until: "", days: 30 }, campaigns };
+  return {
+    period: { since: "", until: "", days: 30 },
+    campaigns,
+    unattributed: { sales: 0, revenue: 0, without_ad_id: 0 },
+    accounts_currency: "BRL" as const,
+  };
 }
 
 export function mockCountrySales(): { rows: Array<{ country_iso: string; country_name: string; sales: number; revenue: number; pct_revenue: number }> } {

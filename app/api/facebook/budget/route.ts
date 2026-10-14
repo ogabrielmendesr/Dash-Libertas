@@ -47,17 +47,12 @@ export async function POST(req: Request) {
       valueCents,
     });
 
-    // Atualiza cache local
+    // Atualiza cache local (update, não upsert: um insert sem ad_account_id
+    // viola o NOT NULL e o cache ficava com o valor antigo até o próximo sync)
     await sb
       .from("fb_campaign_budgets")
-      .upsert(
-        {
-          campaign_id: campaignId,
-          daily_budget: dailyBudget,
-          updated_at: new Date().toISOString(),
-        },
-        { onConflict: "campaign_id" }
-      );
+      .update({ daily_budget: dailyBudget })
+      .eq("campaign_id", campaignId);
 
     return NextResponse.json({
       ok: true,

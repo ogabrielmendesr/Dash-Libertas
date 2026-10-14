@@ -24,6 +24,7 @@ export type FbInsightRow = {
   impressions: string;
   inline_link_clicks?: string;
   actions?: Array<{ action_type: string; value: string }>;
+  action_values?: Array<{ action_type: string; value: string }>;
 };
 
 export class MetaApiError extends Error {
@@ -34,12 +35,29 @@ export class MetaApiError extends Error {
   }
 }
 
+/**
+ * `path` pode já trazer query string (o `paging.next` da Meta vem com cursor
+ * e access_token). Antes concatenávamos "?" de novo, o que corrompia o cursor
+ * da 2ª página em diante ("Invalid cursor") e ainda vazava o token na mensagem.
+ */
 async function graphFetch<T>(path: string, params: Record<string, string>, token: string): Promise<T> {
-  const qs = new URLSearchParams({ ...params, access_token: token }).toString();
-  const r = await fetch(`${GRAPH}${path}?${qs}`, { cache: "no-store" });
+  const url = new URL(`${GRAPH}${path}`);
+  for (const [k, v] of Object.entries(params)) url.searchParams.set(k, v);
+  url.searchParams.set("access_token", token);
+  const r = await fetch(url, { cache: "no-store" });
   const body = await r.json();
-  if (!r.ok) throw new MetaApiError(r.status, body);
+  if (!r.ok) throw new MetaApiError(r.status, redactToken(body, token));
   return body as T;
+}
+
+/** Remove o token de qualquer texto do erro antes de ele ir pra log/resposta */
+function redactToken(body: unknown, token: string): unknown {
+  if (!token) return body;
+  try {
+    return JSON.parse(JSON.stringify(body).split(token).join("[token]"));
+  } catch {
+    return body;
+  }
 }
 
 /**
@@ -97,9 +115,12 @@ export async function fetchAdInsights(opts: {
     const params: Record<string, string> = {
       level: "ad",
       fields:
-        "ad_id,ad_name,adset_id,adset_name,campaign_id,campaign_name,spend,impressions,inline_link_clicks,actions",
+        "ad_id,ad_name,adset_id,adset_name,campaign_id,campaign_name,spend,impressions,inline_link_clicks,actions,action_values",
       time_range: JSON.stringify({ since: opts.since, until: opts.until }),
       time_increment: "1",
+      // Usa a janela de atribuição configurada em cada conjunto — é o que o
+      // Gerenciador de Anúncios mostra. Sem isso a API usa o padrão da conta.
+      use_unified_attribution_setting: "true",
       limit: "200",
     };
     if (after) params.after = after;
@@ -114,17 +135,25 @@ export async function fetchAdInsights(opts: {
 }
 
 /**
- * Extrai métricas de "actions" — page_view e initiate_checkout.
+ * Extrai métricas de "actions"/"action_values" — page view, checkout e as
+ * compras que o próprio Meta atribuiu ao anúncio (coluna "Compras" do Gerenciador).
  */
-export function extractActions(actions: FbInsightRow["actions"] = []) {
-  const get = (type: string) => {
-    const found = actions.find((a) => a.action_type === type);
+export function extractActions(
+  actions: FbInsightRow["actions"] = [],
+  actionValues: FbInsightRow["action_values"] = []
+) {
+  const pick = (list: Array<{ action_type: string; value: string }>, type: string) => {
+    const found = list.find((a) => a.action_type === type);
     return found ? Number(found.value) : 0;
   };
+  const get = (type: string) => pick(actions, type);
+  const getValue = (type: string) => pick(actionValues, type);
   return {
     landing_page_views: get("landing_page_view"),
     initiate_checkouts:
       get("initiate_checkout") || get("offsite_conversion.fb_pixel_initiate_checkout") || get("onsite_conversion.initiate_checkout"),
+    meta_purchases: get("purchase") || get("offsite_conversion.fb_pixel_purchase"),
+    meta_purchase_value: getValue("purchase") || getValue("offsite_conversion.fb_pixel_purchase"),
   };
 }
 
@@ -139,6 +168,7 @@ export type FbCampaignBudget = {
   lifetime_budget?: string;
   budget_remaining?: string;
   configured_status: string;
+  effective_status?: string;
 };
 
 /**
@@ -157,9 +187,55 @@ export async function fetchCampaignBudgets(opts: {
   while (path) {
     const params: Record<string, string> = firstCall
       ? {
-          fields: "id,name,daily_budget,lifetime_budget,budget_remaining,configured_status",
+          fields: "id,name,daily_budget,lifetime_budget,budget_remaining,configured_status,effective_status",
           limit: "200",
           filtering: JSON.stringify([{ field: "effective_status", operator: "IN", value: ["ACTIVE", "PAUSED"] }]),
+        }
+      : {};
+    firstCall = false;
+
+    const resp: Resp = await graphFetch(path, params, opts.token);
+    all.push(...resp.data);
+
+    if (resp.paging?.next) {
+      const u = new URL(resp.paging.next);
+      path = u.pathname.replace(/^\/v\d+\.\d+/, "") + u.search;
+    } else {
+      path = "";
+    }
+  }
+
+  return all;
+}
+
+export type FbAdsetBudget = {
+  id: string;                // adset_id
+  campaign_id: string;
+  daily_budget?: string;     // em centavos — só existe em conjuntos ABO
+  lifetime_budget?: string;
+  effective_status: string;
+};
+
+/**
+ * Busca orçamento e status dos conjuntos de uma ad account.
+ */
+export async function fetchAdsetBudgets(opts: {
+  token: string;
+  adAccountId: string;
+}): Promise<FbAdsetBudget[]> {
+  type Resp = { data: FbAdsetBudget[]; paging?: { next?: string } };
+  const all: FbAdsetBudget[] = [];
+  let path = `/${opts.adAccountId}/adsets`;
+  let firstCall = true;
+
+  while (path) {
+    const params: Record<string, string> = firstCall
+      ? {
+          fields: "id,campaign_id,daily_budget,lifetime_budget,effective_status",
+          limit: "200",
+          filtering: JSON.stringify([
+            { field: "effective_status", operator: "IN", value: ["ACTIVE", "PAUSED", "CAMPAIGN_PAUSED", "WITH_ISSUES", "IN_PROCESS"] },
+          ]),
         }
       : {};
     firstCall = false;

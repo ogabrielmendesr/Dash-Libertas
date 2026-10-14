@@ -509,10 +509,55 @@ export async function fetchDashboard(
 // ============================================================
 // CAMPANHAS
 // ============================================================
-export type CampaignsData = ReturnType<typeof mockCampaigns> & {
+export type CampaignsData = {
+  period: { since: string; until: string; days: number };
+  campaigns: CampaignNode[];
+  unattributed?: { sales: number; revenue: number; without_ad_id: number };
+  accounts_currency?: Currency | null;
   mock?: boolean;
   currency: Currency;
   fx_usd_brl?: number;
+};
+
+export type CampaignAgg = {
+  spend: number;
+  impressions: number;
+  link_clicks: number;
+  landing_page_views: number;
+  initiate_checkouts: number;
+  /** Compras que o próprio Meta atribuiu (pixel/API de conversões) */
+  meta_purchases: number;
+  /** Valor das compras informado ao Meta, já na moeda do display */
+  meta_purchase_value: number;
+  /** Gasto e valor de compra na moeda da conta de anúncio (sem conversão) */
+  spend_acc: number;
+  meta_purchase_value_acc: number;
+  /** Vendas aprovadas na Hotmart com o ID deste anúncio */
+  sales: number;
+  revenue: number;
+};
+
+export type CampaignNode = {
+  campaign_id: string;
+  campaign_name: string;
+  /** Moeda da conta de anúncio — orçamentos ficam nesta moeda */
+  account_currency: Currency;
+  agg: CampaignAgg;
+  daily_budget: number | null;
+  lifetime_budget: number | null;
+  budget_remaining: number | null;
+  configured_status: string | null;
+  status: string | null;
+  budget_type: "CBO" | "ABO";
+  adsets: Array<{
+    adset_id: string;
+    adset_name: string;
+    agg: CampaignAgg;
+    daily_budget: number | null;
+    lifetime_budget: number | null;
+    status: string | null;
+    ads: Array<{ ad_id: string; ad_name: string; agg: CampaignAgg }>;
+  }>;
 };
 
 export async function fetchCampaigns(
@@ -543,7 +588,7 @@ export async function fetchCampaigns(
         .select(`
           ad_id, ad_name, adset_id, adset_name, campaign_id, campaign_name,
           ad_account_id, date, spend, impressions, link_clicks,
-          landing_page_views, initiate_checkouts
+          landing_page_views, initiate_checkouts, meta_purchases, meta_purchase_value
         `)
         .in("ad_account_id", enabledIds2)
         .gte("date", sinceStr)
@@ -571,16 +616,23 @@ export async function fetchCampaigns(
     salesByAd.set(s.utm_content, prev);
   }
 
-  type Agg = { spend: number; impressions: number; link_clicks: number; landing_page_views: number; initiate_checkouts: number; sales: number; revenue: number };
-  const empty = (): Agg => ({ spend: 0, impressions: 0, link_clicks: 0, landing_page_views: 0, initiate_checkouts: 0, sales: 0, revenue: 0 });
+  type Agg = {
+    spend: number; impressions: number; link_clicks: number; landing_page_views: number; initiate_checkouts: number;
+    meta_purchases: number; meta_purchase_value: number;
+    spend_acc: number; meta_purchase_value_acc: number;
+    sales: number; revenue: number;
+  };
+  const empty = (): Agg => ({
+    spend: 0, impressions: 0, link_clicks: 0, landing_page_views: 0, initiate_checkouts: 0,
+    meta_purchases: 0, meta_purchase_value: 0, spend_acc: 0, meta_purchase_value_acc: 0, sales: 0, revenue: 0,
+  });
 
   // Primeiro agrega por ad_id (somando spend de todos os dias)
-  type AdAcc = { ad_id: string; ad_name: string; adset_id: string; adset_name: string; campaign_id: string; campaign_name: string; agg: Agg };
+  type AdAcc = { ad_id: string; ad_name: string; adset_id: string; adset_name: string; campaign_id: string; campaign_name: string; ad_account_id: string; agg: Agg };
   const adsByAdId = new Map<string, AdAcc>();
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   for (const r of (insightRows ?? []) as any[]) {
     const adCurrency: Currency = ((currencyByAcc.get(r.ad_account_id) as Currency) ?? "BRL");
-    const spend = convertAmount(Number(r.spend), adCurrency, display, fx);
     const cur = adsByAdId.get(r.ad_id) ?? {
       ad_id: r.ad_id,
       ad_name: r.ad_name,
@@ -588,13 +640,18 @@ export async function fetchCampaigns(
       adset_name: r.adset_name,
       campaign_id: r.campaign_id,
       campaign_name: r.campaign_name,
+      ad_account_id: r.ad_account_id,
       agg: empty(),
     };
-    cur.agg.spend += spend;
+    cur.agg.spend_acc += Number(r.spend);
+    cur.agg.meta_purchase_value_acc += Number(r.meta_purchase_value ?? 0);
+    cur.agg.spend += convertAmount(Number(r.spend), adCurrency, display, fx);
     cur.agg.impressions += Number(r.impressions);
     cur.agg.link_clicks += Number(r.link_clicks);
     cur.agg.landing_page_views += Number(r.landing_page_views);
     cur.agg.initiate_checkouts += Number(r.initiate_checkouts);
+    cur.agg.meta_purchases += Number(r.meta_purchases ?? 0);
+    cur.agg.meta_purchase_value += convertAmount(Number(r.meta_purchase_value ?? 0), adCurrency, display, fx);
     adsByAdId.set(r.ad_id, cur);
   }
   // Anexa vendas (cruzamento por ad_id apenas) — total no período
@@ -630,23 +687,40 @@ export async function fetchCampaigns(
         adset_name: r.adset_name,
         campaign_id: r.campaign_id,
         campaign_name: r.campaign_name,
+        ad_account_id: r.ad_account_id,
         agg: { ...empty(), sales: sales.count, revenue: sales.revenue },
       });
     }
   }
 
-  const tree = new Map<string, { campaign_id: string; campaign_name: string; agg: Agg; adsets: Map<string, { adset_id: string; adset_name: string; agg: Agg; ads: Map<string, { ad_id: string; ad_name: string; agg: Agg }> }> }>();
+  // Vendas aprovadas que não caíram em nenhum anúncio das contas habilitadas
+  // (sem ID de anúncio, ou ID de anúncio de outra conta). Mostradas à parte
+  // pra que a soma bata com a página principal.
+  const unattributed = { sales: 0, revenue: 0, without_ad_id: 0 };
+  for (const s of salesRange ?? []) {
+    if (s.status !== "approved") continue;
+    if (s.utm_content && adsByAdId.has(s.utm_content)) continue;
+    unattributed.sales += 1;
+    unattributed.revenue += saleAmountInDisplay(s as any, display, fx, fxTable);
+    if (!s.utm_content) unattributed.without_ad_id += 1;
+  }
+
+  const tree = new Map<string, { campaign_id: string; campaign_name: string; ad_account_id: string; agg: Agg; adsets: Map<string, { adset_id: string; adset_name: string; agg: Agg; ads: Map<string, { ad_id: string; ad_name: string; agg: Agg }> }> }>();
   const sumAgg = (a: Agg, b: Agg): Agg => ({
     spend: a.spend + b.spend,
     impressions: a.impressions + b.impressions,
     link_clicks: a.link_clicks + b.link_clicks,
     landing_page_views: a.landing_page_views + b.landing_page_views,
     initiate_checkouts: a.initiate_checkouts + b.initiate_checkouts,
+    meta_purchases: a.meta_purchases + b.meta_purchases,
+    meta_purchase_value: a.meta_purchase_value + b.meta_purchase_value,
+    spend_acc: a.spend_acc + b.spend_acc,
+    meta_purchase_value_acc: a.meta_purchase_value_acc + b.meta_purchase_value_acc,
     sales: a.sales + b.sales,
     revenue: a.revenue + b.revenue,
   });
   for (const ad of adsByAdId.values()) {
-    if (!tree.has(ad.campaign_id)) tree.set(ad.campaign_id, { campaign_id: ad.campaign_id, campaign_name: ad.campaign_name, agg: empty(), adsets: new Map() });
+    if (!tree.has(ad.campaign_id)) tree.set(ad.campaign_id, { campaign_id: ad.campaign_id, campaign_name: ad.campaign_name, ad_account_id: ad.ad_account_id, agg: empty(), adsets: new Map() });
     const c = tree.get(ad.campaign_id)!;
     c.agg = sumAgg(c.agg, ad.agg);
     if (!c.adsets.has(ad.adset_id)) c.adsets.set(ad.adset_id, { adset_id: ad.adset_id, adset_name: ad.adset_name, agg: empty(), ads: new Map() });
@@ -655,24 +729,39 @@ export async function fetchCampaigns(
     s.ads.set(ad.ad_id, { ad_id: ad.ad_id, ad_name: ad.ad_name, agg: ad.agg });
   }
 
-  // Busca budgets das campanhas
+  // Budgets e status das campanhas e conjuntos — ficam na MOEDA DA CONTA,
+  // igual ao Gerenciador e ao que /api/facebook/budget espera ao editar.
   const campaignIds = Array.from(tree.keys());
-  const budgetMap = new Map<string, { daily_budget: number | null; lifetime_budget: number | null; budget_remaining: number | null; configured_status: string | null; budget_type: string }>();
+  const budgetMap = new Map<string, { daily_budget: number | null; lifetime_budget: number | null; budget_remaining: number | null; configured_status: string | null; effective_status: string | null; budget_type: string }>();
+  const adsetMap = new Map<string, { daily_budget: number | null; lifetime_budget: number | null; effective_status: string | null }>();
   if (campaignIds.length > 0) {
     const { data: budgetRows } = await sb
       .from("fb_campaign_budgets")
-      .select("campaign_id, daily_budget, lifetime_budget, budget_remaining, configured_status, budget_type")
+      .select("campaign_id, daily_budget, lifetime_budget, budget_remaining, configured_status, effective_status, budget_type")
       .in("campaign_id", campaignIds);
+    const num = (v: number | null) => (v == null ? null : Number(v));
     for (const b of budgetRows ?? []) {
-      // Converte o budget pra moeda do display (budget está na moeda da ad account)
-      const accId = tree.get(b.campaign_id)?.campaign_id;
-      // Os budgets já foram convertidos de centavos ao salvar no sync
       budgetMap.set(b.campaign_id, {
-        daily_budget: b.daily_budget != null ? Number(b.daily_budget) : null,
-        lifetime_budget: b.lifetime_budget != null ? Number(b.lifetime_budget) : null,
-        budget_remaining: b.budget_remaining != null ? Number(b.budget_remaining) : null,
+        daily_budget: num(b.daily_budget),
+        lifetime_budget: num(b.lifetime_budget),
+        budget_remaining: num(b.budget_remaining),
         configured_status: b.configured_status,
+        effective_status: b.effective_status ?? null,
         budget_type: b.budget_type ?? "CBO",
+      });
+    }
+    const adsetRows = await fetchAllRows((from, to) =>
+      sb
+        .from("fb_adset_budgets")
+        .select("adset_id, daily_budget, lifetime_budget, effective_status")
+        .in("campaign_id", campaignIds)
+        .range(from, to)
+    );
+    for (const a of adsetRows) {
+      adsetMap.set(a.adset_id, {
+        daily_budget: num(a.daily_budget),
+        lifetime_budget: num(a.lifetime_budget),
+        effective_status: a.effective_status ?? null,
       });
     }
   }
@@ -684,20 +773,36 @@ export async function fetchCampaigns(
       return {
         campaign_id: c.campaign_id,
         campaign_name: c.campaign_name,
+        account_currency: ((currencyByAcc.get(c.ad_account_id) as Currency) ?? "BRL") as Currency,
         agg: c.agg,
-        adsets: Array.from(c.adsets.values()).map((s) => ({
-          adset_id: s.adset_id,
-          adset_name: s.adset_name,
-          agg: s.agg,
-          ads: Array.from(s.ads.values()),
-        })),
+        adsets: Array.from(c.adsets.values()).map((s) => {
+          const ab = adsetMap.get(s.adset_id);
+          return {
+            adset_id: s.adset_id,
+            adset_name: s.adset_name,
+            agg: s.agg,
+            daily_budget: ab?.daily_budget ?? null,
+            lifetime_budget: ab?.lifetime_budget ?? null,
+            status: ab?.effective_status ?? null,
+            ads: Array.from(s.ads.values()).sort((x, y) => y.agg.spend - x.agg.spend),
+          };
+        }).sort((x, y) => y.agg.spend - x.agg.spend),
         daily_budget: budget?.daily_budget ?? null,
         lifetime_budget: budget?.lifetime_budget ?? null,
         budget_remaining: budget?.budget_remaining ?? null,
         configured_status: budget?.configured_status ?? null,
+        status: budget?.effective_status ?? budget?.configured_status ?? null,
         budget_type: (budget?.budget_type ?? "CBO") as "CBO" | "ABO",
       };
-    }),
+    }).sort((a, b) => b.agg.spend - a.agg.spend),
+    unattributed,
+    // Moeda única das contas habilitadas (ex.: todas em USD). Quando existe,
+    // a visão "Gerenciador" mostra os valores do Meta sem conversão — batendo
+    // centavo por centavo com o Gerenciador de Anúncios.
+    accounts_currency: (() => {
+      const set = new Set((enabledAccs ?? []).map((a) => a.currency));
+      return set.size === 1 ? (Array.from(set)[0] as Currency) : null;
+    })(),
     mock: false,
     currency: display,
     fx_usd_brl: fx,

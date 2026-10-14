@@ -1,7 +1,10 @@
 import { NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabase";
-import { fetchAdInsights, extractActions, fetchCampaignBudgets, MetaApiError } from "@/lib/meta";
+import { fetchAdInsights, extractActions, fetchCampaignBudgets, fetchAdsetBudgets, MetaApiError } from "@/lib/meta";
 import { brDateStr } from "@/lib/dateRange";
+
+// Reprocessar 30–90 dias de 3+ contas passa fácil dos 10s padrão
+export const maxDuration = 60;
 
 /**
  * Sincroniza insights de TODAS as contas com is_enabled = true.
@@ -49,7 +52,7 @@ export async function POST(req: Request) {
   const sinceStr = sinceDate.toISOString().slice(0, 10);
 
   let totalRecords = 0;
-  const results: Array<{ account: string; records: number; error?: string }> = [];
+  const results: Array<{ account: string; records: number; error?: string; warning?: string }> = [];
 
   for (const acc of accounts) {
     try {
@@ -61,7 +64,8 @@ export async function POST(req: Request) {
       });
 
       const records = rows.map((r) => {
-        const { landing_page_views, initiate_checkouts } = extractActions(r.actions);
+        const { landing_page_views, initiate_checkouts, meta_purchases, meta_purchase_value } =
+          extractActions(r.actions, r.action_values);
         return {
           ad_account_id: acc.ad_account_id,
           campaign_id: r.campaign_id,
@@ -76,6 +80,8 @@ export async function POST(req: Request) {
           link_clicks: Number(r.inline_link_clicks ?? 0),
           landing_page_views,
           initiate_checkouts,
+          meta_purchases,
+          meta_purchase_value,
         };
       });
 
@@ -94,7 +100,8 @@ export async function POST(req: Request) {
         .eq("ad_account_id", acc.ad_account_id);
 
       totalRecords += records.length;
-      results.push({ account: acc.name, records: records.length });
+      const result: (typeof results)[number] = { account: acc.name, records: records.length };
+      results.push(result);
 
       // Sync de budgets das campanhas
       try {
@@ -110,14 +117,41 @@ export async function POST(req: Request) {
             lifetime_budget: b.lifetime_budget ? Number(b.lifetime_budget) / 100 : null,
             budget_remaining: b.budget_remaining ? Number(b.budget_remaining) / 100 : null,
             configured_status: b.configured_status ?? null,
+            effective_status: b.effective_status ?? null,
             budget_type: b.daily_budget || b.lifetime_budget ? "CBO" : "ABO",
           }));
-          await sb
+          const { error } = await sb
             .from("fb_campaign_budgets")
             .upsert(budgetRows, { onConflict: "campaign_id" });
+          if (error) throw new Error(error.message);
         }
-      } catch {
-        // Budget sync is best-effort — don't fail the whole sync
+      } catch (e) {
+        // Best-effort: não derruba o sync, mas fica registrado no log
+        result.warning = `orçamentos das campanhas: ${(e as Error).message}`;
+      }
+
+      // Orçamento (ABO) e status dos conjuntos
+      try {
+        const adsets = await fetchAdsetBudgets({
+          token: conn.access_token,
+          adAccountId: acc.ad_account_id,
+        });
+        if (adsets.length > 0) {
+          const { error } = await sb.from("fb_adset_budgets").upsert(
+            adsets.map((s) => ({
+              adset_id: s.id,
+              campaign_id: s.campaign_id,
+              ad_account_id: acc.ad_account_id,
+              daily_budget: s.daily_budget ? Number(s.daily_budget) / 100 : null,
+              lifetime_budget: s.lifetime_budget ? Number(s.lifetime_budget) / 100 : null,
+              effective_status: s.effective_status ?? null,
+            })),
+            { onConflict: "adset_id" }
+          );
+          if (error) throw new Error(error.message);
+        }
+      } catch (e) {
+        result.warning = [result.warning, `conjuntos: ${(e as Error).message}`].filter(Boolean).join(" · ");
       }
     } catch (e) {
       const msg = e instanceof MetaApiError ? e.message : (e as Error).message;
@@ -127,7 +161,7 @@ export async function POST(req: Request) {
 
   await sb.from("sync_logs").insert({
     type: "facebook_sync",
-    status: results.some((r) => r.error) ? "warning" : "success",
+    status: results.some((r) => r.error || r.warning) ? "warning" : "success",
     records_processed: totalRecords,
     message: `${accounts.length} contas · ${totalRecords} insights · ${days} dias`,
     metadata: { results, since: sinceStr, until: untilStr },
